@@ -9,6 +9,7 @@ final class SpiritScene: SKScene {
     private let stage = SKNode()
     private let body = SKNode()
     private let head = SKSpriteNode()
+    private let aura = SKSpriteNode()
     private let mouth = SKSpriteNode()
     private let eyes = SKNode()
     private let openEyes = SKNode()
@@ -31,8 +32,48 @@ final class SpiritScene: SKScene {
     private let stateBadge = SKLabelNode(fontNamed: "AppleSDGothicNeo-Bold")
     private var motion = SpiritRigMotion()
     private var flameTime = 0.0
+    private var chargeEmissionTime = 0.0
+    private var emitterIndex = 0
+    private var baseStageScale: CGFloat = 1
+    var onTransform: (() -> Void)?
+    var effectTexture: SKTexture { flyingFlameTexture }
+    var effectShader: SKShader? { motion.pose.charge > 0.08 ? chargeShader : nil }
+    var interactionCharge: Double { motion.pose.charge }
+
+    func beginPress() { motion.beginPress() }
+    @discardableResult
+    func endPress(registerTap: Bool) -> Bool { motion.endPress(registerTap: registerTap) }
+    func setDragVelocity(x: Double, y: Double) {
+        let scale = max(stage.xScale, 0.5)
+        motion.setDragVelocity(x: x / scale, y: y / scale)
+    }
     private var previousTime: TimeInterval?
     private var reducedMotion = false
+    private let chargeUniform = SKUniform(name: "u_charge", float: 0)
+    private lazy var chargeShader = SKShader(source: """
+        void main() {
+            vec4 source = SKDefaultShading();
+            vec3 rgb = source.rgb / max(source.a, 0.001);
+            vec3 gold;
+            vec3 blue;
+            if (rgb.g < 0.32) {
+                gold = vec3(0.96, 0.45, 0.03);
+                blue = vec3(0.12, 0.38, 0.83);
+            } else if (rgb.g < 0.65) {
+                gold = vec3(1.0, 0.72, 0.05);
+                blue = vec3(0.17, 0.67, 0.95);
+            } else if (rgb.b < 0.60) {
+                gold = vec3(1.0, 0.90, 0.45);
+                blue = vec3(0.54, 0.90, 1.0);
+            } else {
+                gold = vec3(1.0, 0.98, 0.85);
+                blue = vec3(0.92, 1.0, 1.0);
+            }
+            vec3 palette = mix(gold, blue, smoothstep(0.72, 0.95, u_charge));
+            gl_FragColor = vec4(mix(rgb, palette, min(1.0, u_charge * 2.0)) * source.a, source.a);
+        }
+        """, uniforms: [chargeUniform])
+    private lazy var flyingFlameTexture = makeFlyingFlameTexture()
     private var particles: [(node: SKSpriteNode, age: Double, vx: Double, vy: Double, life: Double, gravity: Double)] = []
     private(set) var spiritState: SpiritState = .idle
     private(set) var assetLoaded = false
@@ -106,6 +147,15 @@ final class SpiritScene: SKScene {
         head.subdivisionLevels = 3
         body.addChild(head)
         flameParts.append(head)
+        aura.name = "chargeAura"
+        aura.texture = head.texture
+        aura.size = head.size
+        aura.anchorPoint = head.anchorPoint
+        aura.position = head.position
+        aura.zPosition = 1.5
+        aura.colorBlendFactor = 1
+        aura.alpha = 0
+        body.addChild(aura)
         eyes.position = CGPoint(x: 0, y: 9.1)
         eyes.zPosition = 2
         head.addChild(eyes)
@@ -221,7 +271,8 @@ final class SpiritScene: SKScene {
         statusBackground.position = statusLabel.position
         // Reserve room for the larger nameplate without covering the feet.
         stage.position.y = max(side * 0.13, statusLabel.position.y + nameplateHeight / 2 + 4)
-        stage.setScale(min(side / 64, (side - stage.position.y) / 50))
+        baseStageScale = min(side / 64, (side - stage.position.y) / 50)
+        stage.setScale(baseStageScale)
         stateBadge.position = CGPoint(x: statusLabel.position.x + image.size.width / 2 + 9,
                                       y: statusLabel.position.y - 4)
         updateStatusBackground()
@@ -279,14 +330,21 @@ final class SpiritScene: SKScene {
         let pose = motion.advance(by: elapsed, reduceMotion: reducedMotion)
         apply(pose)
         if !reducedMotion {
+            if pose.didTransform { onTransform?(); emitEmbers(count: 14, celebration: true, heat: 1) }
+            chargeEmissionTime += elapsed
+            if pose.charge > 0.1 && chargeEmissionTime > 0.15 {
+                emitEmbers(count: 3, celebration: false, heat: 1)
+                chargeEmissionTime = 0
+            }
             if pose.didStrike { emitSparks() }
             if pose.didCelebrate { emitEmbers(count: 16, celebration: true, heat: pose.heat) }
-            if pose.didEmitEmber { emitEmbers(count: 1, celebration: false, heat: pose.heat) }
+            if pose.didEmitEmber { emitEmbers(count: spiritState == .working ? 2 : 1, celebration: false, heat: pose.heat) }
         }
         updateSparks(by: elapsed)
     }
 
     private func apply(_ pose: SpiritRigPose) {
+        stage.setScale(baseStageScale * (1 - pose.charge * 0.10))
         body.position.y = pose.bodyOffsetY
         body.yScale = pose.bodyScaleY
         head.zRotation = pose.headAngle
@@ -304,13 +362,24 @@ final class SpiritScene: SKScene {
         mouth.yScale = pose.mouthOpen
         eyes.position.x = pose.gazeX
         eyes.position.y = 9.1 + pose.gazeY
+        chargeUniform.floatValue = Float(pose.charge)
+        let powerColor = pose.charge > 0.82
+            ? NSColor(red: 0.35, green: 0.84, blue: 1, alpha: 1)
+            : NSColor(red: 1, green: 0.84, blue: 0.20, alpha: 1)
+        aura.color = powerColor
+        aura.position = head.position
+        aura.zRotation = head.zRotation
+        aura.setScale(1 + pose.charge * 0.13)
+        aura.alpha = pose.charge * (0.25 + 0.025 * sin(flameTime * 5))
         let cooling = min(1, (1 - pose.vitality) * 0.8 + pose.restAmount * 0.2)
         for part in flameParts {
             part.color = NSColor(red: 0.78, green: 0.35, blue: 0.12, alpha: 1)
             part.colorBlendFactor = cooling * 0.24
+            part.shader = pose.charge > 0.08 ? chargeShader : nil
+            if pose.charge > 0.08 { part.colorBlendFactor = 0 }
         }
         coreGlow.color = NSColor(red: 1 - pose.heat * 0.55, green: 0.85 + pose.heat * 0.15, blue: 0.3 + pose.heat * 0.7, alpha: 1)
-        coreGlow.alpha = (0.10 + 0.25 * pose.heat + 0.3 * pose.impact) * pose.emberGlow
+        coreGlow.alpha = min(0.8, (0.10 + 0.25 * pose.heat + 0.3 * pose.impact) * pose.emberGlow + pose.charge * 0.25)
         coreGlow.yScale = 0.4 + 0.6 * pose.vitality
         body.alpha = 1
         heldEmber.alpha = pose.heldEmber
@@ -332,33 +401,82 @@ final class SpiritScene: SKScene {
         }
         head.warpGeometry = SKWarpGeometryGrid(columns: count, rows: count,
                                               sourcePositions: source, destinationPositions: destination)
+        aura.warpGeometry = head.warpGeometry
+    }
+
+    /// A tiny cutout flame with an orange silhouette, golden core and cream tip.
+    /// Nearest filtering keeps the layered shape readable at desktop sizes.
+    private func makeFlyingFlameTexture() -> SKTexture {
+        let rows = ["0001000", "0011000", "0012100", "0122100", "0123210",
+                    "1123210", "1233221", "1233321", "1233321", "0122210", "0011100"]
+        let colors: [NSColor] = [.clear,
+            NSColor(red: 0.96, green: 0.29, blue: 0.06, alpha: 1),
+            NSColor(red: 1, green: 0.70, blue: 0.12, alpha: 1),
+            NSColor(red: 1, green: 0.96, blue: 0.70, alpha: 1)]
+        let image = NSImage(size: CGSize(width: 7, height: 11))
+        image.lockFocus()
+        NSGraphicsContext.current?.shouldAntialias = false
+        for (row, pixels) in rows.enumerated() {
+            for (column, digit) in pixels.enumerated() {
+                guard let index = digit.wholeNumberValue, index > 0 else { continue }
+                colors[index].setFill()
+                NSRect(x: column, y: 10 - row, width: 1, height: 1).fill()
+            }
+        }
+        image.unlockFocus()
+        let texture = SKTexture(image: image)
+        texture.filteringMode = .nearest
+        return texture
+    }
+
+    private func flyingFlame(size: Double, heat: Double = 0) -> SKSpriteNode {
+        let flame = SKSpriteNode(texture: flyingFlameTexture,
+                                 size: CGSize(width: size, height: size * 11 / 7))
+        flame.name = "flyingFlame"
+        if motion.pose.charge > 0.08 {
+            flame.shader = chargeShader
+        } else if heat > 0.7 {
+            flame.color = NSColor(red: 1, green: 0.9, blue: 0.6, alpha: 1)
+            flame.colorBlendFactor = 0.15
+        }
+        let tail = SKSpriteNode(color: NSColor(red: 1, green: 0.48, blue: 0.08, alpha: 0.5),
+                               size: CGSize(width: size * 0.30, height: size * 1.5))
+        tail.name = "flameTail"
+        tail.anchorPoint = CGPoint(x: 0.5, y: 1)
+        tail.position.y = -size * 0.25
+        tail.zPosition = -1
+        flame.addChild(tail)
+        return flame
     }
 
     private func emitSparks() {
         let contact = hammer.convert(CGPoint(x: -8, y: 12), to: stage)
         for index in 0..<7 {
-            let pixel = SKSpriteNode(color: index.isMultiple(of: 2)
-                ? NSColor(red: 1, green: 0.84, blue: 0.25, alpha: 1)
-                : NSColor(red: 1, green: 0.39, blue: 0.10, alpha: 1),
-                size: CGSize(width: 0.7, height: 0.7))
+            let pixel = flyingFlame(size: index.isMultiple(of: 2) ? 1.5 : 1.1)
             pixel.position = contact
             sparks.addChild(pixel)
-            particles.append((pixel, 0, Double(index - 3) * 5, 10 + Double(index % 3) * 5, 0.42, 55))
+            particles.append((pixel, 0, Double(index - 3) * 6, 14 + Double(index % 3) * 5, 0.65, 48))
         }
     }
 
     private func emitEmbers(count: Int, celebration: Bool, heat: Double) {
         guard particles.count < 80 else { return }
         for index in 0..<count {
-            let pixel = SKSpriteNode(color: heat > 0.7 && index.isMultiple(of: 3)
-                ? NSColor(red: 0.55, green: 0.85, blue: 1, alpha: 1)
-                : NSColor(red: 1, green: 0.72, blue: 0.2, alpha: 1),
-                size: CGSize(width: 0.65, height: 0.65))
-            pixel.position = CGPoint(x: celebration ? 0 : Double.random(in: -9...9), y: 39)
+            let pixel = flyingFlame(size: celebration ? Double.random(in: 1.8...2.5) : Double.random(in: 1.8...2.3), heat: heat)
+            // Crown, temples, shoulders and feet all contribute a distinct little jet.
+            let emitters: [(Double, Double, Double, Double)] = [
+                (-15, 32, -8, 9), (7, 43, 3, 9), (12, 13, 7, 8),
+                (-7, 3, -4, 10), (-7, 44, -3, 9), (16, 23, 8, 8),
+                (0, 46, 0, 9), (-12, 13, -7, 8), (7, 3, 4, 10),
+                (15, 32, 8, 9), (-16, 23, -8, 8)]
+            let emitter = emitters[emitterIndex % emitters.count]
+            emitterIndex += 1
+            pixel.position = CGPoint(x: celebration ? 0 : emitter.0 + Double.random(in: -1...1),
+                                     y: celebration ? 28 : emitter.1 + Double.random(in: -1...1))
             sparks.addChild(pixel)
             let angle = Double(index) / Double(max(count, 1)) * .pi * 2
-            particles.append((pixel, 0, celebration ? cos(angle) * 15 : Double.random(in: -2...2),
-                              celebration ? sin(angle) * 15 + 8 : 7, 1.4, celebration ? 8 : -1))
+            particles.append((pixel, 0, celebration ? cos(angle) * 22 : emitter.2 + Double.random(in: -2...2),
+                              celebration ? sin(angle) * 18 + 8 : emitter.3, 1.5, celebration ? 8 : -0.5))
         }
     }
 
@@ -368,7 +486,13 @@ final class SpiritScene: SKScene {
             let p = particles[index]
             p.node.position.x += p.vx * delta
             p.node.position.y += (p.vy - p.gravity * p.age) * delta
-            p.node.alpha = max(0, 1 - p.age / p.life)
+            let progress = p.age / p.life
+            // Hold a bright, readable core, then shrink into an ember as it fades.
+            p.node.alpha = max(0, min(1, (1 - progress) / 0.45))
+            p.node.xScale = 1 - 0.35 * progress
+            p.node.yScale = (1 - 0.25 * progress) * (1 + 0.1 * sin(p.age * 17))
+            p.node.zRotation = atan2(-p.vx, p.vy - p.gravity * p.age) * 0.65
+            p.node.childNode(withName: "flameTail")?.yScale = 0.8 + 0.2 * sin(p.age * 11)
         }
         particles.removeAll { particle in
             if particle.age >= particle.life { particle.node.removeFromParent(); return true }

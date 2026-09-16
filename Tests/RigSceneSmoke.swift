@@ -51,6 +51,7 @@ struct RigSceneSmoke {
         var angles: [CGFloat] = []
         var sawSparks = false
         var captured = 0
+        var sawShapedFlame = false
         var time = 0.0
         let output = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
@@ -60,6 +61,11 @@ struct RigSceneSmoke {
             require(body.alpha == 1, "Working spirit body must remain fully opaque")
             angles.append(hammer!.zRotation)
             sawSparks = sawSparks || !(scene.childNode(withName: "//sparks")?.children.isEmpty ?? true)
+            if let flame = scene.childNode(withName: "//flyingFlame") as? SKSpriteNode {
+                sawShapedFlame = sawShapedFlame || (flame.texture != nil
+                    && flame.size.height > flame.size.width
+                    && flame.childNode(withName: "flameTail") != nil)
+            }
             if [0, 24, 35, 39, 60, 90].contains(frame) {
                 guard let texture = view.texture(from: scene, crop: view.bounds),
                       let data = NSBitmapImageRep(cgImage: texture.cgImage()).representation(using: .png, properties: [:])
@@ -69,6 +75,7 @@ struct RigSceneSmoke {
             }
         }
         require(captured == 6, "All six rendered snapshots must be written")
+        require(sawShapedFlame, "Flying embers must have a layered flame texture and tail")
         require(sawSparks, "Actual rendered sparks must appear during a strike")
         require((angles.max()! - angles.min()!) > 1, "Hammer must swing independently through a visible arc")
         scene.render(state: .idle, reduceMotion: false)
@@ -169,6 +176,62 @@ struct RigSceneSmoke {
                 }
             }
         }
+        for side in [128.0, 192.0] {
+            let sample = SpiritScene(size: CGSize(width: side, height: side))
+            sample.provider = .codex
+            sample.tracksPointer = false
+            sample.backgroundColor = NSColor(calibratedWhite: 0.10, alpha: 1)
+            sample.render(state: .working, reduceMotion: false)
+            view.frame = CGRect(x: 0, y: 0, width: side, height: side)
+            view.presentScene(sample)
+            view.isPaused = true
+            for frame in 0...39 { sample.update(Double(frame) / 60) }
+            guard let texture = view.texture(from: sample, crop: view.bounds),
+                  let data = NSBitmapImageRep(cgImage: texture.cgImage()).representation(using: .png, properties: [:])
+            else { fatalError("Flying flame snapshot failed") }
+            try data.write(to: output.appendingPathComponent("flying-flames-\(Int(side)).png"))
+        }
+        for side in [128.0, 192.0] {
+            let sample = SpiritScene(size: CGSize(width: side, height: side))
+            sample.provider = .codex
+            sample.tracksPointer = false
+            sample.backgroundColor = NSColor(calibratedWhite: 0.10, alpha: 1)
+            view.frame = CGRect(x: 0, y: 0, width: side, height: side)
+            view.presentScene(sample)
+            view.isPaused = true
+            sample.beginPress()
+            for frame in 0...180 {
+                sample.update(Double(frame) / 60)
+                if [90, 180].contains(frame) {
+                    guard let texture = view.texture(from: sample, crop: view.bounds),
+                          let data = NSBitmapImageRep(cgImage: texture.cgImage()).representation(using: .png, properties: [:])
+                    else { fatalError("Power snapshot failed") }
+                    try data.write(to: output.appendingPathComponent("power-\(Int(side))-\(frame).png"))
+                }
+            }
+            require(sample.interactionCharge > 0.95, "Long hold must reach full charge")
+            require((sample.childNode(withName: "//chargeAura")?.alpha ?? 0) > 0.2,
+                    "Power must have a visible aura")
+            sample.render(state: .idle, reduceMotion: true)
+            sample.update(4)
+            require(sample.childNode(withName: "//chargeAura")?.alpha == 0,
+                    "Reduce Motion must suppress power aura")
+        }
+        let diverse = SpiritScene(size: CGSize(width: 192, height: 192))
+        diverse.tracksPointer = false
+        var seenFlames = Set<ObjectIdentifier>()
+        var emittedFlames: [SKNode] = []
+        var emitterBands = Set<Int>()
+        for frame in 0..<1800 {
+            diverse.update(Double(frame) / 60)
+            for node in diverse.childNode(withName: "//sparks")!.children {
+                if seenFlames.insert(ObjectIdentifier(node)).inserted {
+                    emittedFlames.append(node) // Retain identities so deallocated sprite addresses cannot be reused.
+                    emitterBands.insert(Int(node.position.y / 8))
+                }
+            }
+        }
+        require(emitterBands.count >= 4, "Embers must originate at feet, shoulders, temples and crown")
         require(comparisonCaptures == 24, "All 24 actual-size background comparisons must be written")
         print("PASS: independent rig, hammer arc, idle recovery, reduced motion; snapshots: \(output.path)")
     }

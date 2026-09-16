@@ -280,4 +280,49 @@ struct SpiritRigMotionTests {
         }
     }
 
+    @Test func repeatedTapsChargeAndOrdinarySeparatedClicksDoNot() {
+        var motion = SpiritRigMotion()
+        for _ in 0..<2 {
+            motion.beginPress()
+            _ = motion.advance(by: 1.0 / 60)
+            let chargedRelease = motion.endPress(registerTap: true)
+            #expect(!chargedRelease)
+        }
+        motion.beginPress()
+        _ = motion.advance(by: 1.0 / 60)
+        let chargedRelease = motion.endPress(registerTap: true)
+        #expect(chargedRelease)
+        let charged = (0..<60).map { _ in motion.advance(by: 1.0 / 60) }
+        #expect(charged.contains { $0.charge > 0.25 })
+        #expect(charged.filter(\.didTransform).count == 1)
+        for _ in 0..<1200 { _ = motion.advance(by: 1.0 / 60) }
+        #expect(motion.pose.charge < 0.01)
+        for _ in 0..<3 {
+            motion.beginPress()
+            let chargedRelease = motion.endPress(registerTap: true)
+            #expect(!chargedRelease)
+            for _ in 0..<60 { _ = motion.advance(by: 1.0 / 60) }
+        }
+    }
+
+    @Test func holdingChargesAndDragLeansWithoutInterruptingForge() {
+        var motion = SpiritRigMotion()
+        motion.setState(.working)
+        motion.beginPress()
+        let frames = (0..<180).map { _ in motion.advance(by: 1.0 / 60) }
+        #expect(motion.pose.charge > 0.95)
+        #expect(frames.filter(\.didTransform).count == 1)
+        #expect(frames.filter(\.didStrike).count == 2)
+        let chargedRelease = motion.endPress(registerTap: true)
+        #expect(chargedRelease)
+        motion.setDragVelocity(x: 250, y: 120)
+        for _ in 0..<60 { _ = motion.advance(by: 1.0 / 60) }
+        #expect(motion.pose.dragLean < -0.2)
+        motion.setDragVelocity(x: 0, y: 0)
+        for _ in 0..<180 { _ = motion.advance(by: 1.0 / 60) }
+        #expect(abs(motion.pose.dragLean) < 0.01)
+        let still = motion.advance(by: 1.0 / 60, reduceMotion: true)
+        #expect(still.charge == 0 && !still.didTransform && still.dragLean == 0)
+    }
+
 }

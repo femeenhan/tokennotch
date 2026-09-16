@@ -6,8 +6,8 @@ public enum CompanionGeometry {
         let side = clampedSize(size)
         // Cover the cutout rig's body, head, flame and moving hammer with a small margin.
         // Keep the outer window corners click-through; a 20% center target missed visible parts.
-        return CGRect(x: visualOrigin.x + side * 0.10, y: visualOrigin.y + side * 0.10,
-                      width: side * 0.80, height: side * 0.85)
+        return CGRect(x: visualOrigin.x + side * 0.05, y: visualOrigin.y + side * 0.10,
+                      width: side * 0.90, height: side * 0.90)
     }
 
     public static func clampedSize(_ size: Double) -> Double {

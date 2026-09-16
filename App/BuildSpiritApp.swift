@@ -48,6 +48,7 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
             panel.spiritScene.provider = provider
             panel.positionChanged = { [weak self] in self?.model.saveOrigin($0, for: provider) }
             panel.clicked = { [weak self] in self?.showUsageQuickLook(for: provider) }
+            panel.transformed = { [weak self] in self?.dismissUsageBubble() }
             panel.contextMenuRequested = { [weak self] in self?.showCompanionMenu(for: provider) }
             if let saved = model.savedOrigin(for: provider) { panel.correctPosition(saved) }
             else if let frame = NSScreen.screens.first?.visibleFrame {
@@ -176,6 +177,7 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
             let windows = [model.generalQuotaBucket?.primary, model.generalQuotaBucket?.secondary].compactMap { $0 }
             panel.spiritScene.remainingQuota = provider == .codex && model.quotaIsFresh(at: now)
                 ? windows.compactMap(\.remainingPercent).min().map { $0 / 100 } : nil
+            panel.updateSpeech(state: current.state)
             panel.spiritScene.isObserved = current.sessions.values.contains { $0.status != .unknown }
             panel.spiritScene.render(state: current.state,
                 reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
@@ -299,7 +301,7 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
 
     @objc private func openMotionReview() {
         if motionReviewWindow == nil {
-            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 520, height: 670),
+            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 520, height: 780),
                 styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
             window.title = "빌드정령 기본 동작"
             window.delegate = self

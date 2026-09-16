@@ -7,7 +7,9 @@ struct MotionReviewView: View {
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @State private var scene = SpiritScene(size: CGSize(width: 384, height: 384))
     @State private var selectedState = "idle"
+    @State private var speechDismissed = false
     @State private var quota = 100.0
+    @State private var charging = false
     @State private var slowMotion = false
     @State private var reduceMotion = false
     @State private var sequence: Task<Void, Never>?
@@ -20,6 +22,14 @@ struct MotionReviewView: View {
                 Text("실제 캐릭터와 같은 렌더러입니다. Codex 연결 없이 확인할 수 있습니다.")
                     .font(.callout).foregroundStyle(.secondary)
             }
+            ZStack {
+                if let message = SpeechPanel.message(for: previewState), !speechDismissed {
+                    PreviewSpeechBubble(message: message) { speechDismissed = true }
+                        .frame(width: SpeechPanel.size.width, height: SpeechPanel.size.height)
+                }
+            }
+            .frame(height: SpeechPanel.size.height)
+            .frame(maxWidth: .infinity, alignment: .trailing)
             SpriteView(scene: scene, preferredFramesPerSecond: 60, options: [.allowsTransparency])
                 .frame(width: 384, height: 384)
                 .frame(maxWidth: .infinity)
@@ -42,6 +52,7 @@ struct MotionReviewView: View {
             }
             .disabled(playingSequence)
             HStack {
+                Toggle("불꽃 충전", isOn: $charging)
                 Toggle("느리게 보기", isOn: $slowMotion)
                 Spacer()
                 Toggle("동작 줄이기", isOn: Binding(
@@ -66,13 +77,16 @@ struct MotionReviewView: View {
         }
         .padding(24)
         .frame(width: 520)
-        .onChange(of: selectedState) { _, _ in updateScene() }
+        .onChange(of: selectedState) { _, _ in speechDismissed = false; updateScene() }
+        .onChange(of: charging) { _, value in
+            if value { scene.beginPress() } else { _ = scene.endPress(registerTap: false) }
+        }
         .onChange(of: quota) { _, _ in updateScene() }
         .onChange(of: reduceMotion) { _, _ in updateScene() }
         .onChange(of: systemReduceMotion) { _, _ in updateScene() }
         .onChange(of: slowMotion) { _, value in scene.playbackRate = value ? 0.5 : 1 }
         .onAppear { scene.isPaused = false; updateScene() }
-        .onDisappear { stopSequence(); scene.isPaused = true }
+        .onDisappear { stopSequence(); _ = scene.endPress(registerTap: false); scene.isPaused = true }
     }
 
     private var previewState: SpiritState {
@@ -121,5 +135,21 @@ struct MotionReviewView: View {
                 sequence = nil
             } catch { /* Closing the window or stopping cancels the sequence. */ }
         }
+    }
+}
+
+
+private struct PreviewSpeechBubble: NSViewRepresentable {
+    let message: String
+    let dismiss: () -> Void
+
+    func makeNSView(context: Context) -> SpiritSpeechView {
+        SpiritSpeechView(frame: CGRect(origin: .zero, size: SpeechPanel.size))
+    }
+
+    func updateNSView(_ view: SpiritSpeechView, context: Context) {
+        view.message = message
+        view.tailOnLeft = true
+        view.dismiss = dismiss
     }
 }

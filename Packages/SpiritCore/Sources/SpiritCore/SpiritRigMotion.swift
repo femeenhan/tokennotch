@@ -15,6 +15,9 @@ public struct SpiritRigPose: Equatable, Sendable {
     public var heat: Double = 0
     public var vitality: Double = 1
     public var restAmount: Double = 0
+    public var charge: Double = 0
+    public var dragLean: Double = 0
+    public var didTransform: Bool = false
     public var emberGlow: Double = 1
     public var heldEmber: Double = 0
     public var didCelebrate: Bool = false
@@ -40,6 +43,37 @@ public struct SpiritRigMotion: Sendable {
     private var vitality = 1.0
     private var heat = 0.0
     private var restAmount = 0.0
+    private var pressElapsed: Double?
+    private var tapEnergy = 0.0
+    private var charge = 0.0
+    private var interactionTime = 0.0
+    private var lastTapTime = -10.0
+    private var tapCount = 0
+    private var dragX = 0.0
+    private var dragY = 0.0
+    private var dragLean = 0.0
+    private var transformed = false
+
+    public mutating func beginPress() { pressElapsed = 0 }
+
+    /// Returns true when release belongs to charging, rather than an ordinary click.
+    @discardableResult
+    public mutating func endPress(registerTap: Bool) -> Bool {
+        let held = (pressElapsed ?? 0) >= 0.45
+        pressElapsed = nil
+        if registerTap && !held {
+            tapCount = interactionTime - lastTapTime < 0.75 ? tapCount + 1 : 1
+            lastTapTime = interactionTime
+            if tapCount >= 3 { tapEnergy = min(1, tapEnergy + 0.55) }
+        }
+        return held || (registerTap && tapCount >= 3)
+    }
+
+    /// Screen velocity normalized by the renderer to the 64-unit character space.
+    public mutating func setDragVelocity(x: Double, y: Double) {
+        dragX = x.isFinite ? min(max(x, -300), 300) : 0
+        dragY = y.isFinite ? min(max(y, -300), 300) : 0
+    }
     private var recovery = 0.0
     private var pointerX: Double?
     private var pointerY: Double?
@@ -119,8 +153,16 @@ public struct SpiritRigMotion: Sendable {
             pose.didStrike = false
             pose.didCelebrate = false
             pose.didEmitEmber = false
+            pose.didTransform = false
             return pose
         }
+        interactionTime += dt
+        if let held = pressElapsed { pressElapsed = held + dt }
+        tapEnergy = max(0, tapEnergy - dt * 0.12)
+        let heldCharge = pressElapsed.map { min(1, max(0, ($0 - 0.45) / 1.35)) } ?? 0
+        let targetCharge = max(tapEnergy, heldCharge)
+        charge += (targetCharge - charge) * (1 - exp(-dt * (targetCharge > charge ? 7 : 0.65)))
+        dragLean += (min(max(-dragX / 700, -0.3), 0.3) - dragLean) * (1 - exp(-dt * 8))
         elapsed += dt
         stateElapsed += dt
         if state == .working && swingTime == nil { swingTime = 0 }
@@ -144,6 +186,11 @@ public struct SpiritRigMotion: Sendable {
         if state != .idle { nextHabit = 12 }
         var next = SpiritRigPose()
         next.vitality = vitality
+        next.charge = charge
+        next.dragLean = dragLean
+        next.didTransform = charge > 0.25 && !transformed
+        if charge > 0.25 { transformed = true }
+        if charge < 0.08 { transformed = false }
         next.heat = heat
         next.emberGlow = (0.55 + 0.45 * vitality) * (state == .sleeping ? 0.5 : 1)
         next.didCelebrate = state == .completed && stateElapsed <= dt
@@ -233,7 +280,7 @@ public struct SpiritRigMotion: Sendable {
         }
         let resting = state == .sleeping || (state == .idle && (idleElapsed > 55 || remainingQuota == 0))
         // Rest is a composed pose. Never stack head/body squash with quota loss.
-        let restTarget = resting && swingTime == nil ? 1.0 : 0.0
+        let restTarget = resting && swingTime == nil && charge < 0.1 && dragX == 0 && dragY == 0 ? 1.0 : 0.0
         restAmount += (restTarget - restAmount) * (1 - exp(-dt * 4))
         next.restAmount = restAmount
         next.flameStretch += 0.12 * heat - 0.07 * (1 - vitality) - 0.035 * restAmount
@@ -283,6 +330,14 @@ public struct SpiritRigMotion: Sendable {
         }
         if state == .attention { next.heldEmber = 0.8 + 0.2 * sin(stateElapsed * 3) }
         next.emberGlow = min(max(next.emberGlow + next.impact * 0.3 + petting * 0.15, 0), 1)
+        next.flameSway += dragLean
+        next.flameStretch += 0.28 * charge + min(abs(dragY) / 1400, 0.12)
+        next.headAngle += dragLean * 0.15
+        if charge > 0.1 {
+            next.eyeOpen = max(next.eyeOpen, 0.8)
+            next.bodyOffsetY += charge * 0.55
+            next.freeArmAngle += charge * 0.3
+        }
         pose = next
         return next
     }
