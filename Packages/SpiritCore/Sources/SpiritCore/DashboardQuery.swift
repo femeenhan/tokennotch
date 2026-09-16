@@ -37,20 +37,20 @@ public struct DashboardQuery: Sendable {
 
         let periodEvents = snapshot.events.filter { inPeriod($0.occurredAt) }
         let periodUsage = snapshot.usage.filter { inPeriod($0.occurredAt) }
-        let activeIDs = Set(periodEvents.map(\.sessionID) + periodUsage.map(\.sessionID))
+        let activeIDs = Set(periodEvents.map { SpiritProvider(rawValue: $0.provider)?.sessionKey($0.sessionID) ?? $0.sessionID } + periodUsage.map { SpiritProvider.codex.sessionKey($0.sessionID) })
         let selectedSessions = snapshot.sessions.filter {
             (projectID == nil || $0.projectID == projectID) &&
-            (activeIDs.contains($0.id) || inPeriod($0.startedAt))
+            (activeIDs.contains($0.provider.sessionKey($0.sessionID)) || inPeriod($0.startedAt))
         }.sorted {
             $0.lastObservedAt == $1.lastObservedAt ? $0.id < $1.id : $0.lastObservedAt > $1.lastObservedAt
         }
         sessions = selectedSessions
-        let selectedIDs = Set(selectedSessions.map(\.id))
-        let selectedEvents = periodEvents.filter { selectedIDs.contains($0.sessionID) }.sorted {
+        let selectedIDs = Set(selectedSessions.map { $0.provider.sessionKey($0.sessionID) })
+        let selectedEvents = periodEvents.filter { selectedIDs.contains(SpiritProvider(rawValue: $0.provider)?.sessionKey($0.sessionID) ?? $0.sessionID) }.sorted {
             $0.occurredAt == $1.occurredAt ? $0.eventID < $1.eventID : $0.occurredAt < $1.occurredAt
         }
         events = selectedEvents
-        let selectedUsage = periodUsage.filter { selectedIDs.contains($0.sessionID) }.sorted {
+        let selectedUsage = periodUsage.filter { selectedIDs.contains(SpiritProvider.codex.sessionKey($0.sessionID)) }.sorted {
             $0.occurredAt == $1.occurredAt ? $0.id < $1.id : $0.occurredAt < $1.occurredAt
         }
         usage = selectedUsage

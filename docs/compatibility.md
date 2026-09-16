@@ -2,7 +2,7 @@
 
 ## 지원 범위
 
-2026-09-16 확인한 로컬 CLI는 `/usr/local/bin/codex`의 `codex-cli 0.154.0`이다. 이번 빌드는 macOS 로컬 CLI command hooks 베타다. Codex 데스크톱 앱, IDE 확장, 원격 CLI, Claude 연동은 지원 대상으로 검증하지 않았다. 다른 CLI 버전은 연결 화면에서 미검증으로 표시한다.
+2026-09-16 확인한 로컬 CLI는 `/usr/local/bin/codex`의 `codex-cli 0.154.0`이다. 이번 빌드는 macOS 로컬 CLI command hooks 베타다. Codex 데스크톱 앱, IDE 확장, 원격 CLI는 지원 대상으로 검증하지 않았다. Claude·Gemini·Grok CLI 어댑터와 설치 기능은 후속 구현했으며 실제 CLI 실사용 검증은 남아 있다. 후속 범위는 [제공자별 정령](providers.md)을 참고한다. 다른 CLI 버전은 연결 화면에서 미검증으로 표시한다.
 
 ## 공식 계약 확인
 

@@ -97,7 +97,7 @@ public final class SpiritSocketServer: @unchecked Sendable {
                 let data = Data(bytes.prefix(size))
                 guard data.last == 10, data.filter({ $0 == 10 }).count == 1,
                       let wire = try? JSONDecoder().decode(SpiritWireEnvelope.self, from: data),
-                      wire.event.schemaVersion == 1, wire.event.provider == "codex",
+                      wire.event.schemaVersion == 1, SpiritProvider(rawValue: wire.event.provider) != nil,
                       !wire.event.sessionID.isEmpty else { continue }
                 receive(wire.event)
             }

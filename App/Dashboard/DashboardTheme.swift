@@ -12,12 +12,12 @@ enum DashboardTheme {
     static let canvas = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(red: 0.13, green: 0.12, blue: 0.10, alpha: 1)
-            : NSColor(red: 0.96, green: 0.91, blue: 0.77, alpha: 1)
+            : NSColor(red: 0.94, green: 0.93, blue: 0.90, alpha: 1)
     })
     static let surface = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(red: 0.18, green: 0.16, blue: 0.13, alpha: 1)
-            : NSColor(red: 0.99, green: 0.95, blue: 0.84, alpha: 1)
+            : NSColor(red: 0.985, green: 0.978, blue: 0.957, alpha: 1)
     })
     static let input = Color(red: 0.65, green: 0.44, blue: 0.27)
     static let cache = Color(red: 0.25, green: 0.59, blue: 0.29)
@@ -68,5 +68,40 @@ extension View {
         padding(12).background(DashboardTheme.surface)
             .overlay(Rectangle().stroke(Color.primary.opacity(0.4), lineWidth: 2))
             .background(DashboardTheme.input.opacity(0.3).offset(x: 3, y: 3))
+    }
+}
+
+// Dashboard controls and sections share one rectangular visual vocabulary.
+struct DashboardButtonStyle: ButtonStyle {
+    var selected = false
+    @Environment(\.isEnabled) private var isEnabled
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: selected ? .semibold : .regular))
+            .foregroundStyle(selected ? DashboardTheme.accent : Color.primary)
+            .padding(.horizontal, 10).frame(height: 28)
+            .background(selected ? DashboardTheme.accent.opacity(0.12) : Color.primary.opacity(configuration.isPressed ? 0.10 : 0.035))
+            .overlay(alignment: .bottom) {
+                if selected { Rectangle().fill(DashboardTheme.accent).frame(height: 2) }
+            }
+            .opacity(isEnabled ? 1 : 0.45)
+    }
+}
+
+struct DashboardSectionTitle: View {
+    let title: String
+    var note: String? = nil
+    var body: some View {
+        HStack(spacing: 10) {
+            PixelText(title, size: 16)
+            if let note { Text(note).font(.system(size: 11)).foregroundStyle(.secondary) }
+        }
+    }
+}
+
+extension View {
+    func dashboardPanel() -> some View {
+        padding(14).background(DashboardTheme.surface)
+            .overlay(Rectangle().stroke(Color.primary.opacity(0.14), lineWidth: 1))
     }
 }

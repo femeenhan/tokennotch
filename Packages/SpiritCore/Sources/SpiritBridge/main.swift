@@ -4,7 +4,7 @@ import SpiritCore
 
 // This observer never prints hook decisions or errors. Every path ends successfully.
 func forwardHook() {
-    guard CommandLine.arguments.contains("--codex-hook") else { return }
+    guard let provider = SpiritProvider.allCases.first(where: { CommandLine.arguments.contains("--\($0.rawValue)-hook") }) else { return }
     var input = Data()
     var bytes = [UInt8](repeating: 0, count: 8192)
     let deadline = DispatchTime.now().uptimeNanoseconds + 250_000_000
@@ -14,10 +14,10 @@ func forwardHook() {
         guard poll(&descriptor, 1, remaining) > 0 else { return }
         let count = read(STDIN_FILENO, &bytes, bytes.count)
         if count == 0 { break }
-        guard count > 0, input.count + count <= CodexHookAdapter.maximumInputBytes else { return }
+        guard count > 0, input.count + count <= ProviderHookAdapter.maximumInputBytes else { return }
         input.append(contentsOf: bytes.prefix(count))
     }
-    guard let wire = try? CodexHookAdapter.adapt(input), let line = try? wire.encodedLine() else { return }
+    guard let wire = try? ProviderHookAdapter.adapt(input, provider: provider), let line = try? wire.encodedLine() else { return }
     var url = SpiritSocketLocation.defaultURL
     if let index = CommandLine.arguments.firstIndex(of: "--socket"), index + 1 < CommandLine.arguments.count {
         url = URL(fileURLWithPath: CommandLine.arguments[index + 1])

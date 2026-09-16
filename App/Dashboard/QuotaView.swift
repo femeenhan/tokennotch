@@ -7,113 +7,77 @@ struct QuotaView: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 5) {
-                        PixelText("남은 사용량", size: 20)
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        DashboardSectionTitle(title: "남은 사용량")
+                        Spacer()
+                        observationStatus(now: context.date)
+                        Button(model.quotaRefreshing ? "조회 중…" : "새로고침") { model.refreshQuota(force: true) }
+                            .disabled(model.quotaRefreshing || !model.quotaMonitoringEnabled)
                     }
-                    Spacer()
-                    Button(model.quotaRefreshing ? "조회 중…" : "새로고침") { model.refreshQuota(force: true) }
-                        .disabled(model.quotaRefreshing || !model.quotaMonitoringEnabled)
-                }
-                observationStatus(now: context.date)
-                if let error = model.quotaError { Text(error).font(.system(size: 12)).foregroundStyle(.red) }
-                HStack(alignment: .top, spacing: 12) {
-                    quotaCard(model.generalQuotaBucket, title: "Astra · Sol", subtitle: "일반 사용 한도", now: context.date)
-                    quotaCard(model.quota?.buckets.first { $0.id == "codex_bengalfox" || $0.name?.localizedCaseInsensitiveContains("spark") == true }, title: "Spark", subtitle: "별도 사용 한도", now: context.date)
-                }
+                    if let error = model.quotaError { Text(error).font(.system(size: 12)).foregroundStyle(.red) }
+                    HStack(alignment: .top, spacing: 20) {
+                        ForEach(quotaItems) { item in
+                            quotaMetric(item, now: context.date)
+                        }
+                    }
+                }.dashboardPanel()
                 trends(now: context.date)
             }
-        }.buttonStyle(PixelButtonStyle())
+        }.buttonStyle(DashboardButtonStyle())
     }
 
-    private func quotaCard(_ bucket: QuotaBucket?, title: String, subtitle: String, now: Date) -> some View {
-        let available = bucket.map(windows) ?? []
-        let main = available.first { $0.windowDurationMins == 10080 } ?? available.first
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                PixelText(title, size: 20)
-                Spacer()
-                Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(main.map(windowLabel) ?? "주간").font(.system(size: 10)).foregroundStyle(.secondary)
-                    PixelText(percent(main?.remainingPercent), size: main?.remainingPercent == nil ? 20 : 38)
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text(main.map { resetText($0.resetsAt, now: now) } ?? "조회 대기").font(DashboardTheme.pixel(11))
-                    Text(main?.resetsAt.map { $0.formatted(.dateTime.month().day().hour().minute()) } ?? "리셋 시각 미제공")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                }
-            }
-            if let main {
-                PixelMeter(remaining: main.remainingPercent).frame(height: 8)
-            } else {
-                Text(model.quotaRefreshing ? "계정 한도 조회 중" : "계정 응답에 한도가 없습니다.").font(.system(size: 12)).foregroundStyle(.secondary)
-            }
-            Divider()
-            ForEach(Array(available.filter { $0.windowDurationMins != main?.windowDurationMins }.enumerated()), id: \.offset) { _, value in
-                HStack {
-                    Text(windowLabel(value)).font(.system(size: 11))
-                    Spacer()
-                    Text(percent(value.remainingPercent)).font(.system(size: 11)).monospacedDigit()
-                    Text(resetText(value.resetsAt, now: now)).font(.system(size: 10)).foregroundStyle(.secondary)
-                }
-                PixelMeter(remaining: value.remainingPercent).frame(height: 4)
-                    .help(value.resetsAt.map { "다음 리셋 " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "리셋 시각 미제공")
-            }
-            if title == "Astra · Sol" { Text("Astra·Sol 공유 한도").font(.system(size: 10)).foregroundStyle(.secondary) }
-        }.frame(maxWidth: .infinity, minHeight: 145, alignment: .topLeading).pixelPanel()
+    private struct QuotaItem: Identifiable {
+        let id: String
+        let title: String
+        let window: QuotaWindow?
     }
 
-    private func observationStatus(now: Date) -> some View {
-        HStack(spacing: 7) {
-            Rectangle().fill(fresh(now) ? DashboardTheme.accent : Color.secondary).frame(width: 6, height: 6)
-            if !model.quotaMonitoringEnabled {
-                Text("자동 조회 중지됨").font(.system(size: 12)).foregroundStyle(.secondary)
-            } else if let date = model.quota?.observedAt {
-                Text("\(fresh(now) ? "자동 갱신" : "이전 관측값") · 마지막 확인 \(date.formatted(date: .abbreviated, time: .shortened))")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-            } else { Text(model.quotaRefreshing ? "로그인된 계정의 한도를 확인하고 있습니다." : "아직 계정 한도를 확인하지 못했습니다.").font(.system(size: 12)).foregroundStyle(.secondary) }
-            Spacer()
-            if !compact && model.quotaMonitoringEnabled { Text("약 1분마다 조회").font(.system(size: 11)).foregroundStyle(.secondary) }
+    private var quotaItems: [QuotaItem] {
+        let buckets: [(String, QuotaBucket?)] = [
+            ("Astra · Sol", model.generalQuotaBucket),
+            ("Spark", model.quota?.buckets.first { $0.id == "codex_bengalfox" || $0.name?.localizedCaseInsensitiveContains("spark") == true })
+        ]
+        return buckets.flatMap { title, bucket -> [QuotaItem] in
+            let available = (bucket.map(windows) ?? []).sorted {
+                ($0.windowDurationMins ?? 0) > ($1.windowDurationMins ?? 0)
+            }
+            if available.isEmpty { return [QuotaItem(id: title, title: title, window: nil)] }
+            return available.enumerated().map { index, window in
+                QuotaItem(id: "\(title)-\(index)", title: title, window: window)
+            }
         }
     }
 
-    private func weekly(now: Date) -> some View {
-        let window = window(minutes: 10080)
-        return VStack(alignment: .leading, spacing: compact ? 10 : 16) {
-            HStack { Text("주간 남은 양").font(DashboardTheme.pixel()); Spacer(); Text("계정 전체").font(.system(size: 11)).foregroundStyle(.secondary) }
-            PixelText(percent(window?.remainingPercent), size: compact ? 48 : 72)
-            if let window {
-                PixelMeter(remaining: window.remainingPercent).frame(height: compact ? 10 : 16)
-                Text(resetText(window.resetsAt, now: now)).font(DashboardTheme.pixel(compact ? 14 : 18))
-                if let date = window.resetsAt {
-                    Text("다음 리셋 \(date.formatted(.dateTime.month().day().weekday().hour().minute())) · \(TimeZone.current.abbreviation() ?? TimeZone.current.identifier)")
-                        .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+    private func quotaMetric(_ item: QuotaItem, now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(item.title).font(.system(size: 12, weight: .semibold))
+                if let window = item.window {
+                    Text(windowLabel(window)).font(.system(size: 12)).foregroundStyle(.secondary)
                 }
-                if window.resetsAt.map({ $0 <= now }) == true { Text("리셋 예정 시각이 지났습니다. 새 조회 결과를 기다려 주세요.").font(.system(size: 12)).foregroundStyle(.secondary) }
-            } else {
-                Text(model.quota == nil ? "계정 한도를 조회하면 표시됩니다." : "이번 계정 응답에 주간 한도가 없습니다.").font(.system(size: 12)).foregroundStyle(.secondary)
-            }
-        }.frame(maxWidth: .infinity, alignment: .leading).pixelPanel()
+            }.help(item.title == "Astra · Sol" ? "Astra와 Sol이 함께 사용하는 계정 한도입니다." : "Spark의 별도 사용 한도입니다.")
+            PixelText(item.window?.remainingPercent.map { percent($0) } ?? "—", size: 32)
+            PixelMeter(remaining: item.window?.remainingPercent).frame(height: 8)
+            Text(item.window.map { resetText($0.resetsAt, now: now) } ?? (model.quotaRefreshing ? "조회 중" : "미제공"))
+                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                .help(item.window?.resetsAt.map { "다음 리셋 " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "리셋 시각 미제공")
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func shortWindow(minutes: Int, label: String, now: Date) -> some View {
-        let value = window(minutes: minutes)
-        return VStack(alignment: .leading, spacing: 10) {
-            Text("\(label) 남은 양").font(DashboardTheme.pixel(14))
-            if let value {
-                PixelText(percent(value.remainingPercent), size: 32)
-                Text(resetText(value.resetsAt, now: now)).font(.system(size: 12)).foregroundStyle(.secondary)
-                if let date = value.resetsAt { Text(date, format: .dateTime.month().day().hour().minute()).font(.system(size: 11)).foregroundStyle(.secondary) }
+    private func observationStatus(now: Date) -> some View {
+        HStack(spacing: 6) {
+            Rectangle().fill(Color.secondary).frame(width: 6, height: 6)
+            if !model.quotaMonitoringEnabled {
+                Text("자동 조회 중지")
+            } else if let date = model.quota?.observedAt {
+                Text("\(fresh(now) ? "마지막 확인" : "이전 값") \(date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)))")
             } else {
-                Text(model.quota == nil ? "조회 대기" : "미제공").font(DashboardTheme.pixel(20))
-                Text("\(label) 한도가 별도로\n제공될 때 표시합니다.").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text(model.quotaRefreshing ? "조회 중" : "확인 대기")
             }
-        }.frame(maxWidth: .infinity, alignment: .leading).pixelPanel()
+        }.font(.system(size: 11)).foregroundStyle(.secondary)
+            .help(model.quotaMonitoringEnabled ? "로그인된 계정의 한도를 약 1분마다 자동 조회합니다." : "자동 조회가 중지되었습니다.")
     }
 
     private func trends(now: Date) -> some View {
@@ -121,31 +85,19 @@ struct QuotaView: View {
         let trend = QuotaTrend(history: matching ? model.quotaHistory : [], bucketID: "codex", now: now)
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 18) {
-                PixelText("한도 소모 추세", size: 18)
-                Text("최근 60분").font(.system(size: 10)).foregroundStyle(.secondary)
+                DashboardSectionTitle(title: "잔여량 추세", note: "최근 60분 · 주간")
                 Spacer()
-                Text(trend.todayUsedPercentagePoints.map { String(format: "오늘 관측 −%.1f%%p", $0) } ?? "오늘 관측 대기")
-                    .help("오늘 첫 관측부터의 일반 계정 잔여율 감소입니다.")
-                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                if fresh(now), model.quotaHistoryError == nil, model.quotaHistory.last?.observedAt == model.quota?.observedAt, let risk = trend.riskMessage {
+                    Text("Astra·Sol 소진 예상").font(.system(size: 11, weight: .medium)).foregroundStyle(DashboardTheme.accent)
+                        .help(risk)
+                }
             }
             QuotaHistoryChart(history: matching ? model.quotaHistory : [])
             if let warning = model.quotaHistoryError { Text(warning).font(.system(size: 12)).foregroundStyle(.secondary) }
-            if fresh(now), model.quotaHistoryError == nil, model.quotaHistory.last?.observedAt == model.quota?.observedAt, let risk = trend.riskMessage {
-                Text(risk).font(.system(size: 11, weight: .medium)).foregroundStyle(DashboardTheme.accent)
-                    .help("복잡한 작업을 마무리한 뒤 Sol 전환이나 추론 강도 조절을 고려하세요.")
-            }
-        }.pixelPanel()
+        }.dashboardPanel()
     }
 
-    private func trendMetric(_ title: String, value: Double?, note: String) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(title).font(.system(size: 12)).foregroundStyle(.secondary)
-            Text(value.map { String(format: "%.1f%%p", $0) } ?? "관측 대기").font(.system(size: compact ? 18 : 24, weight: .medium, design: .monospaced))
-            Text(note).font(.system(size: 11)).foregroundStyle(.secondary)
-        }.frame(maxWidth: .infinity, alignment: .leading)
-    }
     private func windows(_ bucket: QuotaBucket) -> [QuotaWindow] { [bucket.primary, bucket.secondary].compactMap { $0 } }
-    private func window(minutes: Int) -> QuotaWindow? { model.generalQuotaBucket.flatMap { windows($0).first { $0.windowDurationMins == minutes } } }
     private func percent(_ number: Double?) -> String { number.map { $0.formatted(.number.precision(.fractionLength(0...1))) + "%" } ?? "확인 대기" }
     private func windowLabel(_ window: QuotaWindow) -> String {
         switch window.windowDurationMins { case 300: "5시간"; case 1440: "일간"; case 10080: "주간"; case let minutes?: "\(minutes)분"; case nil: "기간 미제공" }
@@ -189,20 +141,19 @@ private struct QuotaHistoryChart: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 22) {
-                smallChart(samples("codex"), title: "Astra · Sol 공유 한도", color: DashboardTheme.accent)
-                smallChart(samples("codex_bengalfox"), title: "Spark 한도", color: DashboardTheme.cache)
+                smallChart(samples("codex"), title: "Astra · Sol", color: DashboardTheme.accent)
+                smallChart(samples("codex_bengalfox"), title: "Spark", color: DashboardTheme.accent)
             }
         }.help("각 그래프는 개별 확대 축입니다. 선의 높이·기울기를 모델 간 절대 사용량으로 비교하지 마세요.")
     }
 
     private func smallChart(_ samples: [(Date, Double)], title: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(color)
             if samples.count >= 2, let first = samples.first, let last = samples.last, last.0 > first.0 {
                 let lower = lowerBound(samples)
                 let upper = lower + axisSpan(samples)
                 HStack {
-                    Text("\(percent(first.1)) → \(percent(last.1))")
+                    Text(title).font(.system(size: 12, weight: .semibold))
                     Spacer(minLength: 4)
                     Text(first.1 == last.1 ? "변화 없음" : "\(number(first.1 - last.1))%p 감소")
                 }.font(.system(size: 11, design: .monospaced))
@@ -213,7 +164,7 @@ private struct QuotaHistoryChart: View {
                         Text(percent((upper + lower) / 2))
                         Spacer(minLength: 0)
                         Text(percent(lower))
-                    }.font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
+                    }.font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                         .frame(width: 42, height: 64)
                     VStack(spacing: 5) {
                         GeometryReader { geometry in
@@ -233,15 +184,14 @@ private struct QuotaHistoryChart: View {
                             Text(first.0, format: .dateTime.hour().minute())
                             Spacer(minLength: 2)
                             Text(last.0, format: .dateTime.hour().minute())
-                        }.font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
+                        }.font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                     }
                 }
-                Text("잔여율 \(percent(lower))-\(percent(upper)) 확대 / 가로축 관측 시각")
-                    .font(.system(size: 9)).foregroundStyle(.secondary)
+                .help("잔여율 \(percent(lower))-\(percent(upper)) 확대 · 가로축은 관측 시각입니다.")
             } else {
+                Text(title).font(.system(size: 12, weight: .semibold))
                 Text("관측 대기").font(.system(size: 14, design: .monospaced)).foregroundStyle(.secondary)
-                Text("같은 리셋 구간의 연속 관측이 2회 이상 필요합니다.")
-                    .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .help("같은 리셋 구간의 연속 관측이 2회 이상 필요합니다.")
                 Spacer(minLength: 0)
             }
         }.frame(maxWidth: .infinity, alignment: .topLeading)
@@ -275,7 +225,7 @@ struct PixelMeter: View {
     let remaining: Double?
     var body: some View {
         GeometryReader { geometry in
-            let cells = 28
+            let cells = max(1, Int((geometry.size.width + 3) / 11))
             HStack(spacing: 3) {
                 ForEach(0..<cells, id: \.self) { index in
                     Rectangle().fill(Double(index) < (remaining ?? 0) / 100 * Double(cells) ? DashboardTheme.accent : Color.primary.opacity(0.08))
@@ -289,26 +239,32 @@ struct PixelMeter: View {
 struct QuotaQuickView: View {
     static let size = CGSize(width: 240, height: 156)
     @ObservedObject var model: CompanionModel
+    var provider: SpiritProvider = .codex
     let openDashboard: () -> Void
     var tailOnLeft = true
     var tailY: CGFloat = 78
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            let weekly = [model.generalQuotaBucket?.primary, model.generalQuotaBucket?.secondary]
-                .compactMap { $0 }.first { $0.windowDurationMins == 10080 }
+            let weekly = provider == .codex ? [model.generalQuotaBucket?.primary, model.generalQuotaBucket?.secondary]
+                .compactMap { $0 }.first { $0.windowDurationMins == 10080 } : nil
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("주간 남은 양").font(DashboardTheme.pixel(12))
+                    Text(provider == .codex ? "주간 남은 양" : provider.displayName).font(DashboardTheme.pixel(12))
                     Spacer()
                     if weekly != nil && !model.quotaIsFresh(at: context.date) {
                         Text("이전 값").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                 }
+                if provider == .codex {
                 PixelText(weekly?.remainingPercent.map {
                     $0.formatted(.number.precision(.fractionLength(0...1))) + "%"
                 } ?? "확인 대기", size: weekly?.remainingPercent == nil ? 24 : 40)
                 if let remaining = weekly?.remainingPercent {
                     PixelMeter(remaining: remaining).frame(height: 6)
+                }
+                } else {
+                    Text(model.providerStatus(for: provider)).font(.system(size: 12)).lineLimit(2)
+                    Text("계정 사용량 조회 미지원").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Button("대시보드 열기", action: openDashboard)
                     .frame(maxWidth: .infinity, alignment: .trailing)

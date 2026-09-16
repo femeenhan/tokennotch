@@ -6,7 +6,12 @@ import SpiritCore
 @MainActor
 final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     private let model = CompanionModel()
-    private var companion: CompanionPanel!
+    private var companion: CompanionPanel! // Legacy diagnostics refer to Codex.
+    private var companions: [SpiritProvider: CompanionPanel] = [:]
+    private var menuProvider: SpiritProvider = .codex
+    private var bubbleProvider: SpiritProvider = .codex
+    private var completionDeadlines: [SpiritProvider: (UUID, Date)] = [:]
+    private var greetingDeadlines: [SpiritProvider: (UUID, Date)] = [:]
     private var statusItem: NSStatusItem!
     private var settingsWindow: NSWindow?
     private var motionReviewWindow: NSWindow?
@@ -24,10 +29,7 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
     private var screenLocked = false
     private var fullscreenLikely = false
     private var hookServer: SpiritSocketServer?
-    private var completionPresentationTimer: Timer?
-    private var presentedCompletionID: UUID?
-    private var greetingPresentationTimer: Timer?
-    private var presentedGreetingID: UUID?
+
 
     static func main() {
         let app = NSApplication.shared
@@ -40,13 +42,20 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
     func applicationDidFinishLaunching(_ notification: Notification) {
         if CommandLine.arguments.contains("--light-appearance") { NSApplication.shared.appearance = NSAppearance(named: .aqua) }
         DashboardTheme.registerFonts()
-        companion = CompanionPanel(size: model.size)
-        companion.positionChanged = { [weak self] in self?.model.saveOrigin($0) }
-        companion.clicked = { [weak self] in self?.openUsageQuickLook() }
-        companion.contextMenuRequested = { [weak self] in self?.showCompanionMenu() }
-        if let saved = model.savedOrigin { companion.correctPosition(saved) }
-        else { companion.correctPosition(CGPoint(x: CGFloat.greatestFiniteMagnitude, y: 0)) }
-        companion.spiritScene.render(state: .idle, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        for (index, provider) in SpiritProvider.allCases.enumerated() {
+            let panel = CompanionPanel(size: model.size(for: provider))
+            panel.title = "빌드정령 · \(provider.displayName)"
+            panel.spiritScene.provider = provider
+            panel.positionChanged = { [weak self] in self?.model.saveOrigin($0, for: provider) }
+            panel.clicked = { [weak self] in self?.showUsageQuickLook(for: provider) }
+            panel.contextMenuRequested = { [weak self] in self?.showCompanionMenu(for: provider) }
+            if let saved = model.savedOrigin(for: provider) { panel.correctPosition(saved) }
+            else if let frame = NSScreen.screens.first?.visibleFrame {
+                panel.correctPosition(CGPoint(x: frame.maxX - CGFloat(index + 1) * 144, y: frame.minY + 16))
+            }
+            companions[provider] = panel
+        }
+        companion = companions[.codex]
         model.onAppearanceChange = { [weak self] in self?.updateAppearance() }
         model.onAlertChange = { [weak self] in self?.updateAlertPresentation() }
         var socketURL = SpiritSocketLocation.defaultURL
@@ -118,7 +127,10 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
         case NSWorkspace.sessionDidResignActiveNotification: sessionInactive = true
         case NSWorkspace.sessionDidBecomeActiveNotification: sessionInactive = false
         case NSWorkspace.accessibilityDisplayOptionsDidChangeNotification:
-            companion.spiritScene.render(state: model.spiritState, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+            for (provider, panel) in companions {
+                panel.spiritScene.render(state: model.stream(for: provider).state,
+                    reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+            }
         default: break
         }
         tick()
@@ -129,7 +141,7 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
         tick()
     }
 
-    @objc private func screensChanged() { companion.correctPosition(); tick() }
+    @objc private func screensChanged() { companions.values.forEach { $0.correctPosition() }; tick() }
 
     @objc private func tick() {
         if !suspended { fullscreenLikely = frontmostWindowCoversScreen(); model.checkDeadlines(); model.pollUsage(); model.refreshQuota() }
@@ -142,56 +154,46 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
 
     private func updateAppearance() {
         guard companion != nil else { return }
-        if companion.spiritScene.spiritState != model.spiritState {
-            companion.spiritScene.render(state: model.spiritState,
+        let now = Date()
+        for provider in SpiritProvider.allCases {
+            let stream = model.stream(for: provider)
+            if let (id, deadline) = completionDeadlines[provider], deadline <= now {
+                completionDeadlines.removeValue(forKey: provider)
+                model.finishCompletionPresentation(id: id, provider: provider)
+            } else if let id = stream.completionPresentationID, completionDeadlines[provider]?.0 != id {
+                completionDeadlines[provider] = (id, now.addingTimeInterval(1))
+            } else if stream.completionPresentationID == nil { completionDeadlines.removeValue(forKey: provider) }
+            if let (id, deadline) = greetingDeadlines[provider], deadline <= now {
+                greetingDeadlines.removeValue(forKey: provider)
+                model.finishGreetingPresentation(id: id, provider: provider)
+            } else if let id = stream.greetingPresentationID, greetingDeadlines[provider]?.0 != id {
+                greetingDeadlines[provider] = (id, now.addingTimeInterval(0.9))
+            } else if stream.greetingPresentationID == nil { greetingDeadlines.removeValue(forKey: provider) }
+            guard let panel = companions[provider] else { continue }
+            let current = model.stream(for: provider)
+            // Only Codex currently has an observed account quota. Other providers
+            // retain normal vitality until their own quota source is available.
+            let windows = [model.generalQuotaBucket?.primary, model.generalQuotaBucket?.secondary].compactMap { $0 }
+            panel.spiritScene.remainingQuota = provider == .codex && model.quotaIsFresh(at: now)
+                ? windows.compactMap(\.remainingPercent).min().map { $0 / 100 } : nil
+            panel.spiritScene.isObserved = current.sessions.values.contains { $0.status != .unknown }
+            panel.spiritScene.render(state: current.state,
                 reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
-        }
-        if presentedCompletionID != model.eventStream.completionPresentationID {
-            completionPresentationTimer?.invalidate()
-            completionPresentationTimer = nil
-            presentedCompletionID = model.eventStream.completionPresentationID
-            if let id = presentedCompletionID {
-                // The prototype presents completion for one second; future sprite clips can
-                // call the same token-checked finish path when their animation ends.
-                let timer = Timer(timeInterval: 1, target: self,
-                    selector: #selector(completionPresentationFinished(_:)), userInfo: id, repeats: false)
-                completionPresentationTimer = timer
-                RunLoop.main.add(timer, forMode: .common)
+            panel.interactionPanel.interactionView.setAccessibilityLabel(
+                "\(provider.displayName). \(model.providerStatus(for: provider)). 클릭으로 요약, 드래그로 이동, 우클릭으로 메뉴")
+            if panel.frame.width != model.size(for: provider) {
+                panel.resize(to: model.size(for: provider)); panel.correctPosition()
             }
+            let visible = model.isShown && model.visibleProviders.contains(provider) && !suspended
+                && !(model.hideInFullScreen && fullscreenLikely)
+            if panel.isVisible != visible || panel.interactionPanel.isVisible != visible
+                || panel.spiritView.isPaused == visible { panel.setRendering(active: visible) }
         }
-        if presentedGreetingID != model.eventStream.greetingPresentationID {
-            greetingPresentationTimer?.invalidate()
-            greetingPresentationTimer = nil
-            presentedGreetingID = model.eventStream.greetingPresentationID
-            if let id = presentedGreetingID {
-                let timer = Timer(timeInterval: 0.9, target: self,
-                    selector: #selector(greetingPresentationFinished(_:)), userInfo: id, repeats: false)
-                greetingPresentationTimer = timer
-                RunLoop.main.add(timer, forMode: .common)
-            }
-        }
-        if companion.frame.width != model.size {
-            companion.resize(to: CompanionGeometry.clampedSize(model.size))
-            companion.correctPosition()
-        }
-        let visible = model.isShown && !suspended && !(model.hideInFullScreen && fullscreenLikely)
-        if !visible { dismissUsageBubble() }
-        else if quotaPanel != nil && quotaAnchorFrame != companion.frame { positionUsageBubble() }
-        if companion.isVisible != visible || companion.interactionPanel.isVisible != visible
-            || companion.spiritView.isPaused == visible {
-            companion.setRendering(active: visible)
+        if let anchor = companions[bubbleProvider], quotaPanel != nil {
+            if !anchor.isVisible { dismissUsageBubble() }
+            else if quotaAnchorFrame != anchor.frame { positionUsageBubble() }
         }
         updateAlertPresentation()
-    }
-
-    @objc private func completionPresentationFinished(_ timer: Timer) {
-        guard let id = timer.userInfo as? UUID else { return }
-        model.finishCompletionPresentation(id: id)
-    }
-
-    @objc private func greetingPresentationFinished(_ timer: Timer) {
-        guard let id = timer.userInfo as? UUID else { return }
-        model.finishGreetingPresentation(id: id)
     }
 
     /// Public window metadata heuristic; maximized borderless windows can be false positives.
@@ -223,23 +225,36 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
         let title = NSMenuItem(title: "빌드정령", action: nil, keyEquivalent: "")
         title.isEnabled = false
         menu.addItem(title)
-        let presentation = SpiritPresentation(state: model.spiritState)
-        let state = NSMenuItem(title: "상태: \(presentation.label)", action: nil, keyEquivalent: "")
+        let state = NSMenuItem(title: "\(menuProvider.displayName): \(model.providerStatus(for: menuProvider))", action: nil, keyEquivalent: "")
         state.isEnabled = false
         menu.addItem(state)
-        let hint = NSMenuItem(title: presentation.hint, action: nil, keyEquivalent: "")
+        let hint = NSMenuItem(title: "해당 제공자의 CLI 이벤트에 반응합니다.", action: nil, keyEquivalent: "")
         hint.isEnabled = false
         menu.addItem(hint)
         menu.addItem(.separator())
         addItem("사용량 바로 보기…", action: #selector(openUsageQuickLook), key: "u", to: menu)
-        addItem(model.isShown ? "캐릭터 숨기기" : "캐릭터 표시", action: #selector(toggleShown), to: menu)
+        if menu === statusItem.menu {
+            addItem(model.isShown ? "정령 모두 숨기기" : "정령 모두 표시", action: #selector(toggleShown), to: menu)
+        } else {
+            addItem("\(menuProvider.displayName) 정령 숨기기", action: #selector(hideCurrentProvider), to: menu)
+        }
+        let providerMenu = NSMenu()
+        for provider in SpiritProvider.allCases {
+            let item = addItem(provider.displayName, action: #selector(toggleProvider(_:)), to: providerMenu)
+            item.representedObject = provider.rawValue
+            item.state = model.visibleProviders.contains(provider) ? .on : .off
+            item.isEnabled = model.visibleProviders.contains(provider) || model.visibleProviders.count < 3
+        }
+        let providers = NSMenuItem(title: "정령 표시 (\(model.visibleProviders.count)/3)", action: nil, keyEquivalent: "")
+        providers.submenu = providerMenu
+        menu.addItem(providers)
         let sizeMenu = NSMenu()
         for size in [80, 96, 128, 160, 192] {
             let item = addItem("\(size) pt", action: #selector(changeSize(_:)), to: sizeMenu)
             item.tag = size
-            item.state = Int(model.size) == size ? .on : .off
+            item.state = Int(model.size(for: menuProvider)) == size ? .on : .off
         }
-        let sizes = NSMenuItem(title: "캐릭터 크기", action: nil, keyEquivalent: "")
+        let sizes = NSMenuItem(title: "\(menuProvider.displayName) 정령 크기", action: nil, keyEquivalent: "")
         sizes.submenu = sizeMenu
         menu.addItem(sizes)
         menu.addItem(.separator())
@@ -248,7 +263,7 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
             addItem("집중 타이머 취소 (약 \(remaining)분 남음)", action: #selector(cancelFocus), to: menu)
         } else { addItem("25분 집중 시작", action: #selector(startFocus), to: menu) }
         addItem("설정 및 리마인더…", action: #selector(openSettings), key: ",", to: menu)
-        addItem("대시보드 열기…", action: #selector(openDashboard), key: "d", to: menu)
+        addItem("대시보드 열기…", action: #selector(openProviderDashboard), key: "d", to: menu)
         addItem("기본 동작 확인…", action: #selector(openMotionReview), to: menu)
         menu.addItem(.separator())
         addItem("빌드정령 종료", action: #selector(quit), key: "q", to: menu)
@@ -261,17 +276,23 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
         return item
     }
 
-    private func showCompanionMenu() {
+    private func showCompanionMenu(for provider: SpiritProvider) {
+        menuProvider = provider
         dismissUsageBubble()
         let menu = NSMenu()
         rebuildMenu(menu)
-        let inputView = companion.interactionPanel.interactionView
+        guard let inputView = companions[provider]?.interactionPanel.interactionView else { return }
         menu.popUp(positioning: nil, at: CGPoint(x: inputView.bounds.midX, y: inputView.bounds.midY),
                    in: inputView)
     }
 
+    @objc private func hideCurrentProvider() { model.setProviderVisible(menuProvider, visible: false) }
     @objc private func toggleShown() { model.isShown.toggle() }
-    @objc private func changeSize(_ sender: NSMenuItem) { model.size = Double(sender.tag) }
+    @objc private func changeSize(_ sender: NSMenuItem) { model.setSize(Double(sender.tag), for: menuProvider) }
+    @objc private func toggleProvider(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String, let provider = SpiritProvider(rawValue: name) else { return }
+        model.setProviderVisible(provider, visible: !model.visibleProviders.contains(provider))
+    }
     @objc private func startFocus() { model.startFocus(minutes: 25) }
     @objc private func cancelFocus() { model.cancelFocus() }
     @objc private func quit() { NSApplication.shared.terminate(nil) }
@@ -309,8 +330,15 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
         }
     }
 
-    @objc private func openUsageQuickLook() {
-        if quotaPanel != nil { dismissUsageBubble(); return }
+    @objc private func openUsageQuickLook() { showUsageQuickLook(for: menuProvider) }
+
+    private func showUsageQuickLook(for provider: SpiritProvider) {
+        if quotaPanel != nil {
+            let same = bubbleProvider == provider
+            dismissUsageBubble()
+            if same { return }
+        }
+        bubbleProvider = provider
         if quotaPanel == nil {
             let panel = UsageBubblePanel(contentRect: CGRect(origin: .zero, size: QuotaQuickView.size),
                 styleMask: [.borderless], backing: .buffered, defer: false)
@@ -328,20 +356,21 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
             positionUsageBubble()
             installUsageBubbleMonitors()
         }
-        model.refreshQuota(force: true)
+        if provider == .codex { model.refreshQuota(force: true) }
         NSApplication.shared.activate(ignoringOtherApps: true)
         quotaPanel?.makeKeyAndOrderFront(nil)
     }
 
     private func positionUsageBubble() {
-        guard let panel = quotaPanel else { return }
-        let placement = UsageBubblePlacement.place(characterFrame: companion.frame,
+        guard let panel = quotaPanel, let anchor = companions[bubbleProvider] else { return }
+        let provider = bubbleProvider
+        let placement = UsageBubblePlacement.place(characterFrame: anchor.frame,
             visibleFrames: NSScreen.screens.map(\.visibleFrame), size: QuotaQuickView.size)
         panel.setFrame(placement.frame, display: true)
-        panel.contentView = NSHostingView(rootView: QuotaQuickView(model: model,
-            openDashboard: { [weak self] in self?.dismissUsageBubble(); self?.openDashboard() },
+        panel.contentView = NSHostingView(rootView: QuotaQuickView(model: model, provider: provider,
+            openDashboard: { [weak self] in self?.model.selectedProvider = provider; self?.dismissUsageBubble(); self?.openDashboard() },
             tailOnLeft: placement.tailOnLeft, tailY: CGFloat(placement.tailYFromTop)))
-        quotaAnchorFrame = companion.frame
+        quotaAnchorFrame = anchor.frame
     }
 
     private func dismissUsageBubble() { quotaPanel?.close() }
@@ -351,7 +380,7 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
         quotaLocalClickMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
             MainActor.assumeIsolated {
                 guard let self, let panel = self.quotaPanel else { return }
-                if event.window !== panel && event.window !== self.companion.interactionPanel {
+                if event.window !== panel && event.window !== self.companions[self.bubbleProvider]?.interactionPanel {
                     self.dismissUsageBubble()
                 }
             }
@@ -368,6 +397,8 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
         quotaLocalClickMonitor = nil
         quotaGlobalClickMonitor = nil
     }
+
+    @objc private func openProviderDashboard() { model.selectedProvider = menuProvider; openDashboard() }
 
     @objc private func openDashboard() {
         if dashboardWindow == nil {
@@ -443,6 +474,18 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
         let renderedBitmap = companion.spiritView.texture(from: companion.spiritScene, crop: companion.spiritView.bounds)
             .map { NSBitmapImageRep(cgImage: $0.cgImage()) }
         let values: [String: Any] = [
+            "visibleProviderCount": companions.values.filter(\.isVisible).count,
+            "providers": SpiritProvider.allCases.map { provider -> [String: Any] in
+                let panel = companions[provider]!
+                let stream = model.stream(for: provider)
+                return ["provider": provider.rawValue, "label": panel.spiritScene.displayedLabel,
+                    "visible": panel.isVisible, "state": String(describing: stream.state),
+                    "observed": !stream.sessions.isEmpty, "sessionCount": stream.sessions.count,
+                    "eventCount": model.dashboard.filtered(for: provider).events.count,
+                    "position": [panel.frame.minX, panel.frame.minY], "size": panel.frame.width,
+                    "visualIgnoresMouseEvents": panel.ignoresMouseEvents,
+                    "interactionWithinVisual": panel.frame.contains(panel.interactionPanel.frame)]
+            },
             "menuBarCreated": statusItem.button != nil,
             "menuItemCount": statusItem.menu?.items.count ?? 0,
             "panelVisible": companion.isVisible,
@@ -497,11 +540,9 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
     func applicationWillTerminate(_ notification: Notification) {
         removeUsageBubbleMonitors()
         model.quotaTask?.cancel()
-        completionPresentationTimer?.invalidate()
-        greetingPresentationTimer?.invalidate()
         hookServer?.stop()
         heartbeat?.invalidate()
-        companion.setRendering(active: false)
+        companions.values.forEach { $0.setRendering(active: false) }
         NotificationCenter.default.removeObserver(self)
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         DistributedNotificationCenter.default().removeObserver(self)

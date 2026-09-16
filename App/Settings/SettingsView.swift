@@ -1,7 +1,9 @@
 import SwiftUI
+import SpiritCore
 
 struct SettingsView: View {
     @ObservedObject var model: CompanionModel
+    @State private var providerSelectionMessage: String?
     @State private var focusMinutes = 25
     @State private var reminderDate = Date().addingTimeInterval(3600)
     @State private var reminderMessage = ""
@@ -10,14 +12,34 @@ struct SettingsView: View {
         Form {
             ConnectionView(model: model)
             Section("함께하기") {
-                Toggle("캐릭터 표시", isOn: $model.isShown)
-                LabeledContent("캐릭터 크기", value: "\(Int(model.size)) pt")
-                Slider(value: $model.size, in: 80...192, step: 1) { Text("캐릭터 크기") }
+                Toggle("정령 전체 표시", isOn: $model.isShown)
+                LabeledContent("표시할 정령", value: "\(model.visibleProviders.count) / 3")
+                ForEach(SpiritProvider.allCases, id: \.self) { provider in
+                    Toggle(provider.displayName, isOn: Binding(
+                        get: { model.visibleProviders.contains(provider) },
+                        set: { visible in
+                            providerSelectionMessage = model.setProviderVisible(provider, visible: visible)
+                                ? nil : "정령은 최대 3개까지 표시할 수 있습니다. 다른 정령을 숨긴 뒤 선택하세요."
+                        }
+                    ))
+                    .disabled(!model.visibleProviders.contains(provider) && model.visibleProviders.count >= 3)
+                }
+                Text("제공자마다 정령 하나를 표시합니다. 숨긴 정령의 연결과 기록 수집은 유지됩니다.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let providerSelectionMessage { Text(providerSelectionMessage).font(.caption).foregroundStyle(.secondary) }
+                Picker("크기를 조절할 정령", selection: $model.selectedProvider) {
+                    ForEach(SpiritProvider.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                }
+                LabeledContent("캐릭터 크기", value: "\(Int(model.size(for: model.selectedProvider))) pt")
+                Slider(value: Binding(
+                    get: { model.size(for: model.selectedProvider) },
+                    set: { model.setSize($0, for: model.selectedProvider) }
+                ), in: 80...192, step: 1) { Text("캐릭터 크기") }
                 Toggle("전체 화면 앱에서 숨기기", isOn: $model.hideInFullScreen)
                 Text("전체 화면 감지는 일부 앱에서 정확하지 않을 수 있습니다.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("알림 소리", isOn: $model.soundEnabled)
-                Text("몸통 중앙을 드래그하면 위치가 저장됩니다. 클릭하면 남은 사용량 말풍선을 엽니다. 정령 메뉴는 캐릭터 우클릭 또는 메뉴 막대 불꽃에서 엽니다.")
+                Text("캐릭터를 드래그하면 위치가 저장됩니다. 클릭하면 해당 제공자의 상태와 사용량 요약을 엽니다. 정령 메뉴는 캐릭터 우클릭 또는 메뉴 막대 불꽃에서 엽니다.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("집중 타이머") {
@@ -32,12 +54,12 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("사용량과 기록") {
-                Toggle("계정 한도 자동 조회", isOn: $model.quotaMonitoringEnabled)
+                Toggle("Codex 계정 한도 자동 조회", isOn: $model.quotaMonitoringEnabled)
                     .onChange(of: model.quotaMonitoringEnabled) { _, enabled in if enabled { model.refreshQuota(force: true) } }
                 Text("계정 한도·리셋 시각·일별 토큰을 약 1분 간격으로 조회합니다. 한도 추세는 8일, 제공된 일별 기록은 최대 26주 보관합니다.")
                     .font(.caption).foregroundStyle(.secondary)
                 Text(model.usageStatus).font(.caption).foregroundStyle(.secondary)
-                Button("사용량 로그 연결…") { model.selectUsageLog() }
+                Button("Codex 사용량 로그 연결…") { model.selectUsageLog() }
                 if model.selectedUsageFilename != nil { Button("토큰 수집 중지") { model.stopUsageCollection() } }
                 DisclosureGroup("기술 진단") {
                     Text(model.hookStatus).font(.caption).foregroundStyle(.secondary)

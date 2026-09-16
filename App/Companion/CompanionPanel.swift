@@ -92,9 +92,9 @@ final class InteractionPanel: NSPanel {
     init() {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
-        title = "빌드정령 몸통 입력"
-        // A faint fill keeps this deliberate rectangular input target nontransparent.
-        // It lies wholly inside the prototype's opaque torso; see the asset manifest.
+        title = "빌드정령 캐릭터 입력"
+        // A faint fill makes the deliberate rig-sized input target reliable for WindowServer.
+        // This includes small transparent gaps between parts; outer window corners pass through.
         backgroundColor = NSColor.black.withAlphaComponent(0.01)
         isOpaque = false
         ignoresMouseEvents = false
@@ -107,7 +107,7 @@ final class InteractionPanel: NSPanel {
         isReleasedWhenClosed = false
         interactionView.setAccessibilityElement(true)
         interactionView.setAccessibilityRole(.button)
-        interactionView.setAccessibilityLabel("빌드정령 몸통 중앙. 드래그로 이동, 클릭으로 남은 사용량 확인, 우클릭으로 메뉴 열기")
+        interactionView.setAccessibilityLabel("빌드정령 캐릭터. 드래그로 이동, 클릭으로 요약 확인, 우클릭으로 메뉴 열기")
         contentView = interactionView
     }
 }

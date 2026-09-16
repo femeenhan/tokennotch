@@ -38,14 +38,28 @@ public actor DashboardStore {
         try Self.execute(pointer, "PRAGMA journal_mode=WAL")
         try Self.execute(pointer, "PRAGMA foreign_keys=ON")
         let version = try Self.rows(pointer, "PRAGMA user_version").first?.first ?? "0"
-        guard version == "0" || version == "1" else { throw DashboardStoreError.unsupportedVersion }
+        guard version == "0" || version == "1" || version == "2" else { throw DashboardStoreError.unsupportedVersion }
         try Self.execute(pointer, "BEGIN IMMEDIATE")
         do {
             try Self.execute(pointer, "CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, data TEXT NOT NULL)")
             try Self.execute(pointer, "CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, name TEXT NOT NULL)")
             try Self.execute(pointer, "CREATE TABLE IF NOT EXISTS assignments (session_id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id))")
             try Self.execute(pointer, "CREATE TABLE IF NOT EXISTS usage (id TEXT PRIMARY KEY, occurred_at REAL NOT NULL, data TEXT NOT NULL)")
-            try Self.execute(pointer, "PRAGMA user_version=1")
+            if version == "1" {
+                // v1 stored raw Codex event and assignment IDs. Rebuild keys without changing payloads.
+                let legacyEvents = try Self.rows(pointer, "SELECT data FROM events ORDER BY rowid")
+                let legacyAssignments = try Self.rows(pointer, "SELECT session_id,project_id FROM assignments")
+                try Self.execute(pointer, "DELETE FROM events")
+                for row in legacyEvents {
+                    let event = try JSONDecoder().decode(SpiritEvent.self, from: Data(row[0].utf8))
+                    try Self.execute(pointer, "INSERT INTO events(id,data) VALUES (?,?)", [Self.storageKey(provider: event.provider, id: event.eventID), row[0]])
+                }
+                try Self.execute(pointer, "DELETE FROM assignments")
+                for row in legacyAssignments {
+                    try Self.execute(pointer, "INSERT INTO assignments(session_id,project_id) VALUES (?,?)", [SpiritProvider.codex.sessionKey(row[0]), row[1].isEmpty ? nil : row[1]])
+                }
+            }
+            try Self.execute(pointer, "PRAGMA user_version=2")
             try Self.execute(pointer, "COMMIT")
         } catch {
             try? Self.execute(pointer, "ROLLBACK")
@@ -59,12 +73,12 @@ public actor DashboardStore {
             lhs.occurredAt == rhs.occurredAt ? lhs.receivedAt < rhs.receivedAt : lhs.occurredAt < rhs.occurredAt
         }
         var restored: [String: SessionState] = [:]
-        for event in events { restored = reduce(sessions: restored, event: event) }
+        for event in events { restored = Self.reduceProviderStates(restored, event: event) }
         self.states = restored.mapValues { $0.status == .ended ? $0 : .restored() }
     }
 
     public func record(_ event: SpiritEvent) throws {
-        guard event.provider == "codex", event.schemaVersion == 1,
+        guard SpiritProvider(rawValue: event.provider) != nil, event.schemaVersion == 1,
               !event.eventID.isEmpty, !event.sessionID.isEmpty else { throw DashboardStoreError.invalidMetadata }
         let countKeys: Set<String> = ["inputTokens", "outputTokens", "cachedInputTokens", "reasoningOutputTokens", "totalTokens",
                                       "input_tokens", "output_tokens", "cached_input_tokens", "reasoning_output_tokens", "total_tokens"]
@@ -77,8 +91,8 @@ public actor DashboardStore {
                                       sourceVersion: event.sourceVersion, payload: payload)
         let bytes = try encoder.encode(storedEvent)
         guard bytes.count <= 32_768, let json = String(data: bytes, encoding: .utf8) else { throw DashboardStoreError.invalidMetadata }
-        try Self.execute(database.pointer, "INSERT OR IGNORE INTO events(id,data) VALUES (?,?)", [event.eventID, json])
-        if sqlite3_changes(database.pointer) > 0 { states = reduce(sessions: states, event: event) }
+        try Self.execute(database.pointer, "INSERT OR IGNORE INTO events(id,data) VALUES (?,?)", [Self.storageKey(provider: event.provider, id: event.eventID), json])
+        if sqlite3_changes(database.pointer) > 0 { states = Self.reduceProviderStates(states, event: event) }
     }
 
     public func snapshot(now: Date = Date()) throws -> DashboardSnapshot {
@@ -93,22 +107,23 @@ public actor DashboardStore {
             return DashboardProject(id: id, path: $0[1], name: $0[2])
         }
         let assignments: [String: UUID?] = Dictionary(uniqueKeysWithValues: try Self.rows(database.pointer, "SELECT session_id,project_id FROM assignments").map { ($0[0], UUID(uuidString: $0[1])) })
-        let groups = Dictionary(grouping: events, by: \.sessionID)
+        let groups = Dictionary(grouping: events) { Self.storageKey(provider: $0.provider, id: $0.sessionID) }
         let unsortedSessions: [DashboardSession] = groups.map { id, events in
-            DashboardSession(id: id, status: states[id]?.status ?? .unknown,
+            DashboardSession(id: (SpiritProvider(rawValue: events[0].provider) ?? .codex).dashboardSessionID(events[0].sessionID), status: states[id]?.status ?? .unknown,
                              startedAt: events.map(\.occurredAt).min() ?? now,
                              lastObservedAt: events.map(\.receivedAt).max() ?? now,
-                             projectID: assignments[id] ?? events.last?.projectID)
+                             projectID: assignments[id] ?? events.last?.projectID,
+                             provider: SpiritProvider(rawValue: events[0].provider) ?? .codex, sessionID: events[0].sessionID)
         }
         let usage = try Self.rows(database.pointer, "SELECT data FROM usage ORDER BY occurred_at,id").map {
             try decoder.decode(UsageRecord.self, from: Data($0[0].utf8))
         }
         var combinedSessions = unsortedSessions
-        for (id, records) in Dictionary(grouping: usage, by: \.sessionID) where groups[id] == nil {
-            combinedSessions.append(DashboardSession(id: id, status: .unknown,
+        for (id, records) in Dictionary(grouping: usage, by: \.sessionID) where groups[SpiritProvider.codex.sessionKey(id)] == nil {
+            combinedSessions.append(DashboardSession(id: SpiritProvider.codex.dashboardSessionID(id), status: .unknown,
                                                       startedAt: records.map(\.occurredAt).min() ?? now,
                                                       lastObservedAt: records.map(\.occurredAt).max() ?? now,
-                                                      projectID: assignments[id] ?? nil))
+                                                      projectID: assignments[SpiritProvider.codex.sessionKey(id)] ?? nil, sessionID: id))
         }
         let sessions = combinedSessions.sorted { lhs, rhs in
             lhs.lastObservedAt == rhs.lastObservedAt ? lhs.id < rhs.id : lhs.lastObservedAt > rhs.lastObservedAt
@@ -126,10 +141,10 @@ public actor DashboardStore {
         return DashboardProject(id: id, path: path, name: name)
     }
 
-    public func assignProject(sessionID: String, projectID: UUID?) throws {
-        let known = try Self.rows(database.pointer, "SELECT id FROM events WHERE json_extract(data,'$.sessionID')=? UNION ALL SELECT id FROM usage WHERE json_extract(data,'$.sessionID')=? LIMIT 1", [sessionID, sessionID])
+    public func assignProject(sessionID: String, provider: SpiritProvider = .codex, projectID: UUID?) throws {
+        let known = try Self.rows(database.pointer, "SELECT id FROM events WHERE json_extract(data,'$.sessionID')=? AND json_extract(data,'$.provider')=? UNION ALL SELECT id FROM usage WHERE json_extract(data,'$.sessionID')=? AND ?='codex' LIMIT 1", [sessionID, provider.rawValue, sessionID, provider.rawValue])
         guard !known.isEmpty else { throw DashboardStoreError.invalidMetadata }
-        try Self.execute(database.pointer, "INSERT INTO assignments(session_id,project_id) VALUES (?,?) ON CONFLICT(session_id) DO UPDATE SET project_id=excluded.project_id", [sessionID, projectID?.uuidString])
+        try Self.execute(database.pointer, "INSERT INTO assignments(session_id,project_id) VALUES (?,?) ON CONFLICT(session_id) DO UPDATE SET project_id=excluded.project_id", [provider.sessionKey(sessionID), projectID?.uuidString])
     }
 
     public func recordUsage(_ records: [UsageRecord]) throws {
@@ -158,6 +173,18 @@ public actor DashboardStore {
             try? Self.execute(database.pointer, "ROLLBACK")
             throw error
         }
+    }
+
+    private static func storageKey(provider: String, id: String) -> String {
+        SpiritProvider(rawValue: provider)?.sessionKey(id) ?? "\(provider):\(Data(id.utf8).base64EncodedString())"
+    }
+
+    private static func reduceProviderStates(_ states: [String: SessionState], event: SpiritEvent) -> [String: SessionState] {
+        let key = storageKey(provider: event.provider, id: event.sessionID)
+        let local = states[key].map { [event.sessionID: $0] } ?? [:]
+        var result = states
+        result[key] = reduce(sessions: local, event: event)[event.sessionID]
+        return result
     }
 
     private static func prepare(_ db: OpaquePointer, _ sql: String, _ values: [String?]) throws -> OpaquePointer {

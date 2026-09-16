@@ -11,11 +11,14 @@ public struct DashboardProject: Codable, Equatable, Identifiable, Sendable {
 
 public struct DashboardSession: Equatable, Identifiable, Sendable {
     public let id: String
+    public let provider: SpiritProvider
+    public let sessionID: String
     public let status: SessionState.Status
     public let startedAt: Date
     public let lastObservedAt: Date
     public let projectID: UUID?
-    public init(id: String, status: SessionState.Status, startedAt: Date, lastObservedAt: Date, projectID: UUID? = nil) {
+    public init(id: String, status: SessionState.Status, startedAt: Date, lastObservedAt: Date, projectID: UUID? = nil, provider: SpiritProvider = .codex, sessionID: String? = nil) {
+        self.provider = provider; self.sessionID = sessionID ?? id
         self.id = id; self.status = status; self.startedAt = startedAt
         self.lastObservedAt = lastObservedAt; self.projectID = projectID
     }
@@ -28,5 +31,13 @@ public struct DashboardSnapshot: Equatable, Sendable {
     public let usage: [UsageRecord]
     public init(projects: [DashboardProject] = [], sessions: [DashboardSession] = [], events: [SpiritEvent] = [], usage: [UsageRecord] = []) {
         self.projects = projects; self.sessions = sessions; self.events = events; self.usage = usage
+    }
+}
+
+public extension DashboardSnapshot {
+    func filtered(for provider: SpiritProvider) -> DashboardSnapshot {
+        DashboardSnapshot(projects: projects, sessions: sessions.filter { $0.provider == provider },
+                          events: events.filter { $0.provider == provider.rawValue },
+                          usage: provider == .codex ? usage : [])
     }
 }

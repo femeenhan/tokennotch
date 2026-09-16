@@ -15,7 +15,62 @@ final class CompanionModel: ObservableObject {
     var reminders: [Reminder] { alerts.reminders }
     var pendingAlertCount: Int { alerts.pending.count }
     @Published var errorMessage: String?
-    @Published private(set) var eventStream = SpiritEventStream()
+    @Published private(set) var providerStreams = ProviderSpiritStreams()
+    var eventStream: SpiritEventStream { stream(for: .codex) }
+    @Published var selectedProvider: SpiritProvider = .codex
+    @Published private(set) var visibleProviders: [SpiritProvider] = [.codex]
+    @Published private var providerSizes: [String: Double] = [:]
+
+    func stream(for provider: SpiritProvider) -> SpiritEventStream { providerStreams.stream(for: provider) }
+
+    @discardableResult
+    func setProviderVisible(_ provider: SpiritProvider, visible: Bool) -> Bool {
+        if visible && !visibleProviders.contains(provider) {
+            guard visibleProviders.count < 3 else {
+                errorMessage = "정령은 최대 3개까지 표시할 수 있습니다. 다른 정령을 먼저 숨겨 주세요."
+                return false
+            }
+            visibleProviders.append(provider)
+        } else if !visible { visibleProviders.removeAll { $0 == provider } }
+        defaults.set(visibleProviders.map(\.rawValue), forKey: "visibleSpiritProviders")
+        errorMessage = nil
+        onAppearanceChange?()
+        return true
+    }
+
+    func size(for provider: SpiritProvider) -> Double {
+        provider == .codex ? size : providerSizes[provider.rawValue] ?? 128
+    }
+
+    func setSize(_ value: Double, for provider: SpiritProvider) {
+        let clamped = CompanionGeometry.clampedSize(value)
+        if provider == .codex { size = clamped }
+        else {
+            providerSizes[provider.rawValue] = clamped
+            defaults.set(providerSizes, forKey: "providerSpiritSizes")
+            onAppearanceChange?()
+        }
+    }
+
+    func providerStatus(for provider: SpiritProvider) -> String {
+        let stream = stream(for: provider)
+        guard !stream.sessions.isEmpty else { return "상태 미관측 · CLI 연결과 이벤트 수신을 확인하세요." }
+        let working = stream.sessions.values.filter { $0.status == .working }.count
+        let attention = stream.sessions.values.filter { $0.status == .attention }.count
+        if working > 0 || attention > 0 { return "작업 중 \(working) · 확인 필요 \(attention)" }
+        if stream.sessions.values.contains(where: { $0.status == .unknown }) { return "상태 확인 불가 · 새 이벤트를 기다립니다." }
+        return SpiritPresentation(state: stream.state).label + " · 마지막 관측 상태"
+    }
+
+    func savedOrigin(for provider: SpiritProvider) -> CGPoint? {
+        if provider == .codex { return savedOrigin }
+        guard let point = defaults.array(forKey: "spiritOrigin.\(provider.rawValue)") as? [Double], point.count == 2 else { return nil }
+        return CGPoint(x: point[0], y: point[1])
+    }
+    func saveOrigin(_ point: CGPoint, for provider: SpiritProvider) {
+        if provider == .codex { saveOrigin(point) }
+        else { defaults.set([point.x, point.y], forKey: "spiritOrigin.\(provider.rawValue)") }
+    }
     @Published var hookStatus = "연결을 준비하고 있습니다."
     @Published var codexCLI: CodexCLI?
     @Published var dashboard = DashboardSnapshot()
@@ -52,19 +107,19 @@ final class CompanionModel: ObservableObject {
     var spiritState: SpiritState { eventStream.state }
 
     func receiveHook(_ event: SpiritEvent) {
-        eventStream.receive(event)
-        hookStatus = "Codex CLI 이벤트를 수신했습니다."
+        providerStreams.receive(event)
+        hookStatus = "\(SpiritProvider(rawValue: event.provider)?.displayName ?? event.provider) CLI 이벤트를 수신했습니다."
         onAppearanceChange?()
         performDashboardOperation { store in try await store.record(event) }
     }
 
-    func finishCompletionPresentation(id: UUID) {
-        eventStream.finishCompletionPresentation(id: id)
+    func finishCompletionPresentation(id: UUID, provider: SpiritProvider = .codex) {
+        providerStreams.finishCompletionPresentation(id: id, provider: provider)
         onAppearanceChange?()
     }
 
-    func finishGreetingPresentation(id: UUID) {
-        eventStream.finishGreetingPresentation(id: id)
+    func finishGreetingPresentation(id: UUID, provider: SpiritProvider = .codex) {
+        providerStreams.finishGreetingPresentation(id: id, provider: provider)
         onAppearanceChange?()
     }
 
@@ -88,6 +143,13 @@ final class CompanionModel: ObservableObject {
         isShown = defaults.bool(forKey: "spiritShown")
         hideInFullScreen = defaults.bool(forKey: "hideInFullScreen")
         soundEnabled = defaults.bool(forKey: "soundEnabled")
+        if let stored = defaults.stringArray(forKey: "visibleSpiritProviders") {
+            visibleProviders = ProviderSelection.normalized(stored.compactMap(SpiritProvider.init(rawValue:)))
+        }
+        providerSizes = defaults.dictionary(forKey: "providerSpiritSizes") as? [String: Double] ?? [:]
+        if let index = CommandLine.arguments.firstIndex(of: "--providers"), index + 1 < CommandLine.arguments.count {
+            visibleProviders = ProviderSelection.normalized(CommandLine.arguments[index + 1].split(separator: ",").compactMap { SpiritProvider(rawValue: String($0)) })
+        }
         if let data = defaults.data(forKey: "localAlertState"),
            let restored = try? JSONDecoder().decode(LocalAlertState.self, from: data) {
             alerts = restored

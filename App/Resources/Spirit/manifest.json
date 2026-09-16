@@ -5,17 +5,28 @@
   "image": "smith-rig-atlas.png",
   "approvedReference": "smith-spirit.png",
   "defaultDisplaySizePoints": 128,
-  "displaySizeRangePoints": [80, 192],
+  "displaySizeRangePoints": [
+    80,
+    192
+  ],
   "productionSpriteSheet": false,
   "clips": [],
   "motion": "Continuous independent head, eyes, shoulder/hammer and free-arm transforms; flame mesh deformation; strike-synchronized sparks; smooth forge recovery. Native 60Hz renderer. macOS Reduce Motion disables motion and particles.",
-  "atlasSizePixels": [1254, 1254],
+  "atlasSizePixels": [
+    1254,
+    1254
+  ],
   "review": "Menu > 기본 동작 확인; preview uses a separate scene and never modifies real Codex session state.",
   "interaction": {
     "visualWindowIgnoresMouseEvents": true,
-    "normalizedInputRectBottomLeft": [0.4, 0.4, 0.2, 0.2],
+    "normalizedInputRectBottomLeft": [
+      0.1,
+      0.1,
+      0.8,
+      0.85
+    ],
     "inputPanelBlackFillAlpha": 0.01,
-    "technicalDebt": "Prototype-only conservative opaque torso target. Replace with production sprite alpha-mask-derived input regions when detailed sprites are authored. Flame and outer silhouette are intentionally not interactive."
+    "technicalDebt": "Rig-sized rectangular input target covers body, head, flame and hammer with a small margin. Transparent gaps inside the target also receive clicks; outer window corners remain click-through. Not per-pixel silhouette routing."
   },
   "limitations": "Basic motion review build. No mouse-following, typing-speed reactions, drag physics, or authored per-pixel flame-shape animation yet. Flame currently uses mesh deformation; no anvil or impact sound."
 }

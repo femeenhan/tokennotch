@@ -12,6 +12,15 @@ public struct SpiritRigPose: Equatable, Sendable {
     public var gazeX: Double = 0
     public var freeArmAngle: Double = 0
     public var impact: Double = 0
+    public var heat: Double = 0
+    public var vitality: Double = 1
+    public var restAmount: Double = 0
+    public var emberGlow: Double = 1
+    public var heldEmber: Double = 0
+    public var didCelebrate: Bool = false
+    public var didEmitEmber: Bool = false
+    public var mouthOpen: Double = 1
+    public var gazeY: Double = 0
     public var didStrike: Bool = false
 
     public init() {}
@@ -27,6 +36,54 @@ public struct SpiritRigMotion: Sendable {
     private var gestureBody = 0.0
     private var gestureArm = 0.0
     private var swingTime: Double?
+    private var remainingQuota: Double?
+    private var vitality = 1.0
+    private var heat = 0.0
+    private var restAmount = 0.0
+    private var recovery = 0.0
+    private var pointerX: Double?
+    private var pointerY: Double?
+    private var gaze = 0.0
+    private var wind = 0.0
+    private var petting = 0.0
+    private var surprise = 0.0
+    private var surpriseCooldown = 0.0
+    private var emberElapsed = 0.0
+    private var idleElapsed = 0.0
+    private var nextHabit = 12.0
+    private var habitElapsed = 10.0
+    private var habitIndex = 0
+    private var habits = [1, 0, 2]
+
+    /// A missing or invalid observation must not imply exhaustion.
+    public mutating func setRemainingQuota(_ value: Double?) {
+        let next = value.flatMap { $0.isFinite ? min(max($0, 0), 1) : nil }
+        if let old = remainingQuota, let next, next - old > 0.15 { recovery = 2.4 }
+        remainingQuota = next
+    }
+
+    /// Coordinates and velocities are in the character's 64-unit space.
+    public mutating func setPointer(x: Double?, y: Double?, velocityX: Double = 0, velocityY: Double = 0) {
+        let nearby = x?.isFinite == true && y?.isFinite == true
+            && abs(x!) < 75 && abs(y! - 28) < 65
+        if nearby {
+            let speed = hypot(velocityX, velocityY)
+            if pointerX == nil && speed > 80 && abs(x!) < 25 && surpriseCooldown <= 0 {
+                surprise = 1
+                surpriseCooldown = 4
+            }
+            if velocityX.isFinite { wind = min(max(velocityX / 650, -0.3), 0.3) }
+            if y! > 32 && y! < 62 && abs(x!) < 22 && speed > 8 && speed < 170 {
+                petting = min(1, petting + 0.08)
+            }
+            pointerX = x
+            pointerY = y
+        } else {
+            pointerX = nil
+            pointerY = nil
+        }
+    }
+
     private static let strikeTime = 0.57
     private static let cycleDuration = 1.5
 
@@ -44,7 +101,13 @@ public struct SpiritRigMotion: Sendable {
     public mutating func advance(by delta: Double, reduceMotion: Bool = false) -> SpiritRigPose {
         if reduceMotion {
             pose = SpiritRigPose()
-            pose.eyeOpen = state == .sleeping ? 0.12 : 1
+            pose.restAmount = state == .sleeping || (state == .idle && remainingQuota == 0) ? 1 : 0
+            pose.eyeOpen = pose.restAmount == 1 ? 0.12 : 1
+            pose.hammerAngle = pose.restAmount * 0.95
+            pose.headAngle = pose.restAmount * 0.035
+            pose.vitality = quotaVitality
+            pose.heat = state == .working ? 0.65 : 0
+            pose.emberGlow = state == .sleeping ? 0.4 : 0.65 + 0.35 * quotaVitality
             swingTime = nil
             gestureHead = 0
             gestureBody = 0
@@ -54,13 +117,41 @@ public struct SpiritRigMotion: Sendable {
         let dt = delta.isFinite ? min(max(delta, 0), 1.0 / 20) : 0
         guard dt > 0 else {
             pose.didStrike = false
+            pose.didCelebrate = false
+            pose.didEmitEmber = false
             return pose
         }
         elapsed += dt
         stateElapsed += dt
         if state == .working && swingTime == nil { swingTime = 0 }
 
+        let targetVitality = quotaVitality
+        vitality += (targetVitality - vitality) * (1 - exp(-dt * 2))
+        heat += ((state == .working ? 1.0 : 0.0) - heat) * (1 - exp(-dt * (state == .working ? 2 : 0.12)))
+        recovery = max(0, recovery - dt)
+        surprise = max(0, surprise - dt * 2.5)
+        surpriseCooldown = max(0, surpriseCooldown - dt)
+        wind *= exp(-dt * 5)
+        petting *= exp(-dt * 0.7)
+        idleElapsed = state == .idle ? idleElapsed + dt : 0
+        habitElapsed += dt
+        if state == .idle && idleElapsed >= nextHabit {
+            habitElapsed = 0
+            if habits.isEmpty { habits = [0, 1, 2].shuffled() }
+            habitIndex = habits.removeFirst()
+            nextHabit = idleElapsed + 13 + Double.random(in: 0...8)
+        }
+        if state != .idle { nextHabit = 12 }
         var next = SpiritRigPose()
+        next.vitality = vitality
+        next.heat = heat
+        next.emberGlow = (0.55 + 0.45 * vitality) * (state == .sleeping ? 0.5 : 1)
+        next.didCelebrate = state == .completed && stateElapsed <= dt
+        emberElapsed += dt
+        if emberElapsed > (state == .working || petting > 0.3 ? 0.32 : 1.8) {
+            next.didEmitEmber = true
+            emberElapsed = 0
+        }
         let breath = sin(elapsed * 2.1)
         next.bodyOffsetY = 0.3 * breath
         next.bodyScaleY = 1 + 0.018 * breath
@@ -135,8 +226,71 @@ public struct SpiritRigMotion: Sendable {
         next.headAngle += gestureHead
         next.bodyOffsetY += gestureBody
         next.freeArmAngle += gestureArm
+        if state == .working && stateElapsed < 0.45 {
+            let ignition = sin(.pi * stateElapsed / 0.45)
+            next.bodyScaleY -= ignition * 0.025
+            next.flameStretch += ignition * 0.15
+        }
+        let resting = state == .sleeping || (state == .idle && (idleElapsed > 55 || remainingQuota == 0))
+        // Rest is a composed pose. Never stack head/body squash with quota loss.
+        let restTarget = resting && swingTime == nil ? 1.0 : 0.0
+        restAmount += (restTarget - restAmount) * (1 - exp(-dt * 4))
+        next.restAmount = restAmount
+        next.flameStretch += 0.12 * heat - 0.07 * (1 - vitality) - 0.035 * restAmount
+        next.flameSway *= 0.65 + 0.55 * vitality + 0.2 * heat
+        next.flameSway += wind + surprise * 0.09
+        next.flameStretch += surprise * 0.25
+        next.bodyOffsetY -= (1 - vitality) * 0.35
+        next.headAngle += (1 - vitality) * 0.025 + restAmount * 0.035
+        next.freeArmAngle += restAmount * 0.22
+        if swingTime == nil { next.hammerAngle += restAmount * 0.95 }
+        next.flameSway *= 1 - restAmount * 0.65
+        if state == .idle { next.eyeOpen *= 0.8 + 0.2 * vitality }
+        if resting {
+            next.eyeOpen = 0.12
+            next.emberGlow *= 0.7 + 0.08 * sin(elapsed * 1.2)
+        }
+        let gazeTarget = pointerX.map { min(max($0 / 14, -1.8), 1.8) } ?? (0.4 * sin(elapsed * 0.65))
+        gaze += (gazeTarget - gaze) * (1 - exp(-dt * 7))
+        next.gazeX = gaze
+        next.gazeY = pointerY.map { min(max(($0 - 28) / 30, -0.6), 0.6) } ?? 0
+        if state != .working {
+            next.headAngle += gaze * 0.025
+            next.bodyOffsetY += petting * 0.35
+            next.eyeOpen *= 1 - petting * 0.65
+            if recovery > 0 {
+                let stretch = sin(.pi * (1 - recovery / 2.4))
+                next.bodyOffsetY += stretch * 1.4
+                next.flameStretch += stretch * 0.2
+                next.freeArmAngle -= stretch * 0.4
+            }
+            if state == .idle && habitElapsed < 2.4 && !resting {
+                let gesture = sin(.pi * habitElapsed / 2.4)
+                switch habitIndex {
+                case 0: // Comb the flame.
+                    next.freeArmAngle -= gesture * 1.1
+                    next.flameSway += gesture * 0.12
+                case 1: // Catch and release a floating ember.
+                    next.freeArmAngle -= gesture * 0.75
+                    next.heldEmber = gesture
+                default: // A little fiery yawn / tired, contented sigh.
+                    next.mouthOpen = 1 + gesture * 1.8
+                    next.eyeOpen *= 1 - gesture * 0.75
+                    next.flameStretch += gesture * 0.18
+                    next.headAngle += gesture * 0.1
+                }
+            }
+        }
+        if state == .attention { next.heldEmber = 0.8 + 0.2 * sin(stateElapsed * 3) }
+        next.emberGlow = min(max(next.emberGlow + next.impact * 0.3 + petting * 0.15, 0), 1)
         pose = next
         return next
+    }
+
+    private var quotaVitality: Double {
+        guard let remainingQuota else { return 1 }
+        if remainingQuota == 0 { return 0.12 }
+        return 0.25 + 0.75 * min(remainingQuota / 0.5, 1)
     }
 
     private func hammerAngle(at time: Double) -> Double {

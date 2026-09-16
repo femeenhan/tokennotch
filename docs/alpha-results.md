@@ -147,3 +147,25 @@ Computer Use는 새 입력 창 대신 시각 SKView 창을 대상으로 선택�
 실제 마우스로 중앙 클릭 메뉴/우클릭/드래그, Space 전환, 잠금·절전 후 두 창 동기 복원을 확인해야 한다. 시각 창은 항상 ignore이므로 투명 영역 클릭을 시각 창이 가로채는 경로는 구조적으로 제거했지만, 교차 앱 실제 입력 자동화 성공을 별도로 주장하지 않는다.
 
 로그: `.build/task-2-fix3-red.log`, `.build/task-2-fix3-tests.log`, `.build/task-2-fix3-build.log`, `.build/task-2-fix3-diagnostics.log`.
+
+## Fix round 4 — 리그 캐릭터의 클릭 누락 (2026-09-16)
+
+사용자가 캐릭터를 클릭해도 말풍선이 한 번에 열리지 않고 바탕화면이 표시되는 현상을 보고했다. 시각 창은 항상 클릭을 통과시키고 별도 입력 창은 과거 단일 PNG 기준 중앙 20%×20%만 받았다. 128pt에서 약 26×26pt이며, 파츠 리그의 몸통 아래·망치·불꽃이 이 영역 밖인 것을 실제 SpriteKit 렌더링 표본으로 확인했다. 따라서 해당 부위 클릭은 아래 앱/바탕화면으로 전달된다. 바탕화면 표시 자체의 macOS 설정과 교차 앱 실제 입력은 자동화로 확정 재현하지 않았다.
+
+입력 프레임을 bottom-left 정규 좌표 [0.10, 0.10, 0.80, 0.85]로 확대했다. 128pt에서는 약 102×109pt이다. 캐릭터와 작은 여유 공간을 하나의 안정적인 사각형으로 받는다. 이 사각형 안의 파츠 사이 투명한 틈도 조작 대상이며 바깥 창 모서리는 계속 클릭 통과한다. 이전 알파 의존 라우팅·마우스 폴링·이벤트 재전송은 추가하지 않았다.
+
+- 기존 영역에서 몸통·망치·불꽃 누락 회귀 10개 assertion 실패(RED), 수정 후 geometry 두 테스트 통과(GREEN).
+- 코어 155개/21 suite 통과, Swift 6 Debug 빌드 성공.
+- 다중 정령 통합 1개와 앱 훅 통합 3개 통과.
+- `CompanionClickSmoke.swift`: 좌클릭·우클릭·취소 라우팅, 이동/크기 변경 후 입력 창 정렬, 80/128/192pt와 일곱 동작의 84개 렌더링 표본에서 실제 가시 픽셀의 입력 영역 포함을 확인했다. 장식 불티는 검사에서 제외했다.
+
+네이티브 smoke 실행:
+
+```sh
+mkdir -p .build/click-smoke/Spirit
+cp App/Resources/Spirit/smith-rig-atlas.png .build/click-smoke/Spirit/
+swiftc -parse-as-library -swift-version 6 -I Packages/SpiritCore/.build/debug -I Packages/SpiritCore/Sources/CSQLite -L Packages/SpiritCore/.build/debug -lSpiritCore App/Companion/SpiritScene.swift App/Companion/CompanionPanel.swift Tests/CompanionClickSmoke.swift -o .build/click-smoke/CompanionClickSmoke
+.build/click-smoke/CompanionClickSmoke
+```
+
+최종 입력 정책은 이 절과 현재 manifest 기준이며, 초기 round 3의 작은 중앙 입력 사각형은 더 이상 사용하지 않는다.

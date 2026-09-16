@@ -22,15 +22,15 @@ public enum HookInstaller {
         try JSONSerialization.data(withJSONObject: object(data), options: [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes])
     }
 
-    public static func install(in data: Data, command: String) throws -> Data {
+    public static func install(in data: Data, command: String, events names: [String] = CodexHookAdapter.supportedEvents, timeout: Int = 1) throws -> Data {
         var root = try object(data)
         var events = root["hooks"] as? [String: [[String: Any]]] ?? [:]
-        for name in CodexHookAdapter.supportedEvents {
+        for name in names {
             var groups = events[name] ?? []
             let present = groups.contains { group in
                 (group["hooks"] as? [[String: Any]] ?? []).contains { owns($0, command: command) }
             }
-            if !present { groups.append(["hooks": [["type": "command", "command": command, "timeout": 1]]]) }
+            if !present { groups.append(["hooks": [["type": "command", "command": command, "timeout": timeout]]]) }
             events[name] = groups
         }
         root["hooks"] = events
@@ -68,7 +68,7 @@ public enum HookInstaller {
     }
 
     /// Call only for an explicit install/remove action. No default path means previews cannot write accidentally.
-    @discardableResult public static func write(to file: URL, command: String, installing: Bool) throws -> URL? {
+    @discardableResult public static func write(to file: URL, command: String, installing: Bool, events: [String] = CodexHookAdapter.supportedEvents, timeout: Int = 1) throws -> URL? {
         let parent = file.deletingLastPathComponent()
         var directory = open(parent.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         if directory < 0 && errno == ENOENT {
@@ -84,7 +84,7 @@ public enum HookInstaller {
         let name = file.lastPathComponent
         let initial = try readRegularFile(name, in: directory)
         let original = initial?.data ?? Data("{}".utf8)
-        let updated = try installing ? install(in: original, command: command) : remove(from: original, command: command)
+        let updated = try installing ? install(in: original, command: command, events: events, timeout: timeout) : remove(from: original, command: command)
         if updated == original || (initial == nil && !installing) { return nil }
         let backupName = initial != nil ? "hooks.json.build-spirit-\(UUID().uuidString).bak" : nil
         if let backupName {

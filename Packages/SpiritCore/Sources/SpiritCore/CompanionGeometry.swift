@@ -4,9 +4,10 @@ import CoreGraphics
 public enum CompanionGeometry {
     public static func interactionFrame(visualOrigin: CGPoint, size: Double) -> CGRect {
         let side = clampedSize(size)
-        let inset = side * 2 / 5
-        return CGRect(x: visualOrigin.x + inset, y: visualOrigin.y + inset,
-                      width: side / 5, height: side / 5)
+        // Cover the cutout rig's body, head, flame and moving hammer with a small margin.
+        // Keep the outer window corners click-through; a 20% center target missed visible parts.
+        return CGRect(x: visualOrigin.x + side * 0.10, y: visualOrigin.y + side * 0.10,
+                      width: side * 0.80, height: side * 0.85)
     }
 
     public static func clampedSize(_ size: Double) -> Double {

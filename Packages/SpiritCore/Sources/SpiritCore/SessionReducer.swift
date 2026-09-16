@@ -189,8 +189,7 @@ private func acceptsCurrentTurnEvent(_ event: SpiritEvent, for session: SessionS
 }
 
 private func recordTurn(_ event: SpiritEvent, in session: inout SessionState) {
-    guard let turnID = event.turnID else { return }
-    session.latestTurnID = turnID
+    if let turnID = event.turnID { session.latestTurnID = turnID }
     session.latestTurnOccurredAt = event.occurredAt
 }
 
