@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Swift Package Manager
+.build/
+Packages/**/.build/
+.swiftpm/
+
+# Xcode user and build data
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# Local environment
+.xcode.env.local
+*.local
+
+# Agent execution workspace
+.superpowers/

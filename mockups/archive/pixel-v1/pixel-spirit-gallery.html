@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="빌드정령 픽셀 캐릭터 시안 3종 비교">
+  <title>빌드정령 픽셀 캐릭터 3안</title>
+  <style>
+    :root { color-scheme: dark; --page: #0f1015; --panel: #17181e; --line: #30313a; --ink: #f4f0e7; --muted: #8f9099; --accent: #f26a2e; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100dvh; color: var(--ink); background: var(--page); font-family: ui-monospace, "SFMono-Regular", Menlo, "Apple SD Gothic Neo", monospace; }
+    header { min-height: 92px; display: flex; align-items: center; justify-content: space-between; gap: 28px; padding: 20px 26px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    h1 { margin: 0 0 7px; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Apple SD Gothic Neo", sans-serif; font-size: 25px; letter-spacing: -.04em; }
+    header p { margin: 0; color: var(--muted); font-size: 11px; }
+    nav { display: flex; gap: 6px; }
+    button, a { min-height: 36px; padding: 0 13px; border: 1px solid #3a3b45; border-radius: 0; color: #aaaab2; background: #111218; font: 800 10px ui-monospace, monospace; cursor: pointer; text-decoration: none; }
+    button:hover, a:hover { color: var(--ink); background: #24252d; }
+    button:active, a:active { transform: translate(1px, 1px); }
+    button[aria-pressed="true"] { color: #1d1009; border-color: var(--accent); background: var(--accent); }
+    button:focus-visible, a:focus-visible { outline: 2px solid #ffd45d; outline-offset: 2px; }
+    .frame-wrap { height: calc(100dvh - 92px); }
+    iframe { width: 100%; height: 100%; border: 0; background: var(--page); }
+    @media (max-width: 720px) { header { align-items: flex-start; flex-direction: column; } .frame-wrap { height: calc(100dvh - 148px); min-height: 680px; } nav { width: 100%; } button { flex: 1; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div><h1>빌드정령 픽셀 캐릭터</h1><p>컨테이너 없이 투명 픽셀 스프라이트로 비교합니다.</p></div>
+    <nav aria-label="시안 선택">
+      <button type="button" data-page="pixel-spirit-a.html" aria-pressed="true">A / Forge Cub</button>
+      <button type="button" data-page="pixel-spirit-b.html" aria-pressed="false">B / Ember</button>
+      <button type="button" data-page="pixel-spirit-c.html" aria-pressed="false">C / Golem</button>
+    </nav>
+  </header>
+  <div class="frame-wrap"><iframe id="preview" src="pixel-spirit-a.html" title="선택한 빌드정령 픽셀 시안"></iframe></div>
+  <script>
+    const frame = document.getElementById("preview");
+    const buttons = [...document.querySelectorAll("[data-page]")];
+    buttons.forEach(button => button.addEventListener("click", () => {
+      frame.src = button.dataset.page;
+      buttons.forEach(item => item.setAttribute("aria-pressed", String(item === button)));
+    }));
+  </script>
+</body>
+</html>

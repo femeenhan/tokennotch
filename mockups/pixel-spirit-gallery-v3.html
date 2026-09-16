@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>빌드정령 · 꼬마 대장장이 캐릭터 시안</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f1ec;color:#30251f;font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",sans-serif}main{max-width:1320px;margin:auto;padding:42px 36px}header{margin-bottom:32px}h1{font-size:32px;letter-spacing:-1.4px;margin:0 0 12px}p{line-height:1.6}header p{color:#72645b;margin:0}button,select{font:inherit;padding:10px 16px;background:transparent;color:inherit;border:1px solid #ad9a8a;cursor:pointer}button:focus-visible,select:focus-visible{outline:3px solid #df601f;outline-offset:3px}button[aria-pressed=true]{background:#402b20;color:#fff1db}.tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:28px 0 18px}.tools label{margin-left:auto}.comparison{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}figure{margin:0;min-width:0}.stage{height:370px;display:grid;place-items:center;background:var(--preview,#e8e2d7);border-bottom:2px solid #af9983;overflow:hidden}.stage img{width:var(--size,240px);height:var(--size,240px);object-fit:contain;image-rendering:pixelated;display:block;background:transparent}figcaption{padding:22px 0}h2{font-size:19px;margin:0 0 8px}figcaption p{font-size:14px;color:#72645b;margin:0}.note{font-size:12px;color:#7a6c63;border-top:1px solid #d7cfc6;padding-top:20px;margin-top:24px}a{color:inherit}.error{color:#b42e13;font-size:13px}.dark{--preview:#222329}.grid{--preview:repeating-conic-gradient(#e0d9ce 0% 25%,#f3f0ea 0% 50%) 50%/20px 20px}@media(max-width:760px){main{padding:24px 18px}.comparison{grid-template-columns:1fr}.stage{height:300px}.tools label{margin-left:0}h1{font-size:27px}}
+</style>
+</head>
+<body><main>
+<header><h1>곁에 두고 싶은 꼬마 대장장이.</h1><p>불꽃 머리, 짧은 손발, 작은 앞치마. 얼굴과 성격이 다른 세 캐릭터입니다.</p></header>
+<div class="tools" aria-label="미리보기 설정">
+<button data-bg="light" aria-pressed="true">밝은 배경</button><button data-bg="dark" aria-pressed="false">어두운 배경</button><button data-bg="grid" aria-pressed="false">투명 확인</button>
+<label for="size">표시 크기 </label><select id="size"><option value="80">80px</option><option value="128">128px</option><option value="192">192px</option><option value="240" selected>240px · 확대</option></select>
+</div>
+<section class="comparison" aria-label="새 캐릭터 시안 비교">
+<figure><div class="stage"><img src="assets/pet-v3-smith.png" alt="큰 망치를 양손으로 잡고 앉은 불꽃 머리 꼬마 대장장이"></div><figcaption><h2>A. 뚝딱이</h2><p>작아도 고집은 센 수습 대장장이.<br>큰 망치를 잡고 앉아 다음 일을 기다립니다.</p></figcaption></figure>
+<figure><div class="stage"><img src="assets/pet-v3-sleepy.png" alt="졸린 눈으로 망치를 안고 있는 동글동글한 꼬마 대장장이"></div><figcaption><h2>B. 꾸벅이</h2><p>평소에는 졸려 보여도 할 일은 하는 성격.<br>둥근 얼굴과 짧은 팔다리로 포근함을 줍니다.</p></figcaption></figure>
+<figure><div class="stage"><img src="assets/pet-v3-spark.png" alt="망치를 어깨에 메고 웃는 짧은 손발의 불꽃 머리 꼬마 도깨비"></div><figcaption><h2>C. 톡이</h2><p>자기가 만든 걸 자랑하고 싶은 꼬마 도깨비.<br>장난스러운 얼굴과 당당한 자세가 특징입니다.</p></figcaption></figure>
+</section>
+<p class="note">이름은 임시입니다. 지금은 얼굴·비율·성격을 선택하는 정적 시안이며, 선택 후 눈 깜박임·망치질·꾸벅임 등의 동작을 제작합니다.</p>
+</main><script>
+document.querySelectorAll('[data-bg]').forEach(button=>button.addEventListener('click',()=>{document.body.className=button.dataset.bg;document.querySelectorAll('[data-bg]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)))}));
+document.getElementById('size').addEventListener('change',event=>document.documentElement.style.setProperty('--size',event.target.value+'px'));
+document.querySelectorAll('img').forEach(img=>img.addEventListener('error',()=>{const p=document.createElement('p');p.className='error';p.textContent='이미지를 불러오지 못했습니다. 페이지를 다시 열어주세요.';img.replaceWith(p)}));
+</script></body></html>

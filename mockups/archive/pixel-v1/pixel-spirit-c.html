@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="빌드정령 픽셀 캐릭터 C안 Forge Golem">
+  <title>빌드정령 픽셀 시안 C - Forge Golem</title>
+  <link rel="stylesheet" href="pixel-spirit.css">
+</head>
+<body data-variant="c">
+  <main class="concept">
+    <aside class="brief">
+      <a class="back" href="pixel-spirit-gallery.html">← 세 시안 비교</a>
+      <p class="variant">C안 / 도구 성격 강화</p>
+      <h1>Forge<br>Golem</h1>
+      <p class="summary">화로와 모루를 합친 단단한 몸체입니다. 귀여움보다 작업 관리자와 개발 도구의 인상을 강화했습니다.</p>
+      <div class="controls">
+        <fieldset class="states">
+          <legend>상태</legend>
+          <button class="control" type="button" data-state="idle" aria-pressed="true">idle</button>
+          <button class="control" type="button" data-state="working" aria-pressed="false">working</button>
+          <button class="control" type="button" data-state="attention" aria-pressed="false">attention</button>
+          <button class="control" type="button" data-state="completed" aria-pressed="false">completed</button>
+          <button class="control" type="button" data-state="error" aria-pressed="false">error</button>
+        </fieldset>
+        <fieldset>
+          <legend>표시 크기</legend>
+          <button class="control" type="button" data-size="80" aria-pressed="false">80</button>
+          <button class="control" type="button" data-size="128" aria-pressed="false">128</button>
+          <button class="control" type="button" data-size="192" aria-pressed="true">192</button>
+        </fieldset>
+        <fieldset>
+          <legend>투명 배경 확인</legend>
+          <button class="control" type="button" data-surface-choice="grid" aria-pressed="true">grid</button>
+          <button class="control" type="button" data-surface-choice="dark" aria-pressed="false">dark</button>
+          <button class="control" type="button" data-surface-choice="light" aria-pressed="false">light</button>
+        </fieldset>
+      </div>
+      <div class="meta"><span>TOOL CHARACTER 100%</span><span>48×56</span></div>
+    </aside>
+    <section class="viewport" data-surface="grid" aria-label="Forge Golem 투명 배경 미리보기">
+      <div class="desktop-strip"><span>BUILD SPIRIT</span><span>state: <b id="stateLabel">idle</b></span></div>
+      <div class="stage">
+        <div class="baseline"></div>
+        <div class="sprite-wrap"><canvas id="spiritCanvas" role="img" aria-label="화로 몸체와 망치를 가진 픽셀 골렘"></canvas></div>
+        <p class="caption">강한 외곽선과 금속 몸체로 개발 도구다운 무게를 강조.</p>
+      </div>
+    </section>
+  </main>
+  <script src="pixel-spirit.js"></script>
+</body>
+</html>

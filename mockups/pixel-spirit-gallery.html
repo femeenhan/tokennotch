@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>빌드정령 · 작은 망치를 든 대장장이 정령</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f1ec;color:#30251f;font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",sans-serif}main{max-width:1320px;margin:auto;padding:42px 36px}header{margin-bottom:32px}h1{font-size:32px;letter-spacing:-1.4px;margin:0 0 12px}p{line-height:1.6}header p{color:#72645b;margin:0}button,select{font:inherit;padding:10px 16px;background:transparent;color:inherit;border:1px solid #ad9a8a;cursor:pointer}button:focus-visible,select:focus-visible{outline:3px solid #df601f;outline-offset:3px}button[aria-pressed=true]{background:#402b20;color:#fff1db}.tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:28px 0 18px}.tools label{margin-left:auto}.comparison{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}figure{margin:0;min-width:0}.stage{height:370px;display:grid;place-items:center;background:var(--preview,#e8e2d7);border-bottom:2px solid #af9983;overflow:hidden}.stage img{width:var(--size,240px);height:var(--size,240px);object-fit:contain;image-rendering:pixelated;display:block;background:transparent}figcaption{padding:22px 0}h2{font-size:19px;margin:0 0 8px}figcaption p{font-size:14px;color:#72645b;margin:0}.note{font-size:12px;color:#7a6c63;border-top:1px solid #d7cfc6;padding-top:20px;margin-top:24px}a{color:inherit}.error{color:#b42e13;font-size:13px}.dark{--preview:#222329}.grid{--preview:repeating-conic-gradient(#e0d9ce 0% 25%,#f3f0ea 0% 50%) 50%/20px 20px}@media(max-width:760px){main{padding:24px 18px}.comparison{grid-template-columns:1fr}.stage{height:300px}.tools label{margin-left:0}h1{font-size:27px}}
+/* A single, still concept on white; preserve the existing plain HTML preview. */
+body{background:#f6f6f6;color:#302b29}main{max-width:960px;padding-top:32px}header{margin-bottom:24px}h1{font-size:26px}.comparison{grid-template-columns:1fr}.stage{height:480px;background:#fff;border:0;padding:20px}.stage img{width:auto;height:var(--size,432px);max-width:100%;object-fit:contain}.tools{margin:20px 0 16px}.tools label{margin-left:0}figcaption{padding:18px 0}figcaption p{font-size:13px}.note{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:8px}select:hover{border-color:#514137}@media(max-width:760px){.stage{height:460px}.stage img{max-height:420px}h1{font-size:24px}}
+</style>
+</head>
+<body><main>
+<header><h1>작은 망치를 든 대장장이 정령.</h1><p>둥근 불꽃 머리와 짧은 팔다리, 손에 꼭 쥔 망치 하나.</p></header>
+<div class="tools" aria-label="미리보기 설정">
+<label for="size">표시 높이 </label><select id="size"><option value="96">96px</option><option value="144">144px</option><option value="288">288px</option><option value="432" selected>432px · 확대</option></select>
+</div>
+<section class="comparison" aria-label="대장장이 정령 단일 시안">
+<figure><div class="stage"><img src="assets/pet-v5-smith.png" width="1254" height="1254" alt="한쪽으로 기운 둥근 불꽃 머리와 짧은 팔다리를 가진 정령이 한 손으로 회색 망치를 쥐고 있는 단순한 픽셀 시안"></div><figcaption><h2>꼬마 대장장이</h2><p>넓은 색면과 단순한 표정에, 작은 망치로 대장장이의 성격을 더했습니다.</p></figcaption></figure>
+</section>
+<p class="note"><span>흰 배경의 정적 디자인 시안입니다.</span><a href="assets/pet-v5-smith.png" download="smith-spirit-concept.png">시안 PNG 내려받기</a></p>
+</main><script>
+document.getElementById('size').addEventListener('change',event=>document.documentElement.style.setProperty('--size',event.target.value+'px'));
+document.querySelectorAll('img').forEach(img=>img.addEventListener('error',()=>{const p=document.createElement('p');p.className='error';p.textContent='이미지를 불러오지 못했습니다. 페이지를 다시 열어주세요.';img.replaceWith(p)}));
+</script></body></html>

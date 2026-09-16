@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "assetStatus": "basic-cutout-rig",
+  "source": "Selected low-detail pixel blacksmith spirit with a single hammer",
+  "image": "smith-rig-atlas.png",
+  "approvedReference": "smith-spirit.png",
+  "defaultDisplaySizePoints": 128,
+  "displaySizeRangePoints": [80, 192],
+  "productionSpriteSheet": false,
+  "clips": [],
+  "motion": "Continuous independent head, eyes, shoulder/hammer and free-arm transforms; flame mesh deformation; strike-synchronized sparks; smooth forge recovery. Native 60Hz renderer. macOS Reduce Motion disables motion and particles.",
+  "atlasSizePixels": [1254, 1254],
+  "review": "Menu > 기본 동작 확인; preview uses a separate scene and never modifies real Codex session state.",
+  "interaction": {
+    "visualWindowIgnoresMouseEvents": true,
+    "normalizedInputRectBottomLeft": [0.4, 0.4, 0.2, 0.2],
+    "inputPanelBlackFillAlpha": 0.01,
+    "technicalDebt": "Prototype-only conservative opaque torso target. Replace with production sprite alpha-mask-derived input regions when detailed sprites are authored. Flame and outer silhouette are intentionally not interactive."
+  },
+  "limitations": "Basic motion review build. No mouse-following, typing-speed reactions, drag physics, or authored per-pixel flame-shape animation yet. Flame currently uses mesh deformation; no anvil or impact sound."
+}

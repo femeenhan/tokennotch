@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="빌드정령 픽셀 캐릭터 B안 Ember Sprite">
+  <title>빌드정령 픽셀 시안 B - Ember Sprite</title>
+  <link rel="stylesheet" href="pixel-spirit.css">
+</head>
+<body data-variant="b">
+  <main class="concept">
+    <aside class="brief">
+      <a class="back" href="pixel-spirit-gallery.html">← 세 시안 비교</a>
+      <p class="variant">B안 / 작은 화면 우선</p>
+      <h1>Ember<br>Sprite</h1>
+      <p class="summary">몸통을 줄이고 큰 눈과 불꽃을 강조했습니다. 80px에서도 상태와 표정이 가장 빠르게 읽힙니다.</p>
+      <div class="controls">
+        <fieldset class="states">
+          <legend>상태</legend>
+          <button class="control" type="button" data-state="idle" aria-pressed="true">idle</button>
+          <button class="control" type="button" data-state="working" aria-pressed="false">working</button>
+          <button class="control" type="button" data-state="attention" aria-pressed="false">attention</button>
+          <button class="control" type="button" data-state="completed" aria-pressed="false">completed</button>
+          <button class="control" type="button" data-state="error" aria-pressed="false">error</button>
+        </fieldset>
+        <fieldset>
+          <legend>표시 크기</legend>
+          <button class="control" type="button" data-size="80" aria-pressed="false">80</button>
+          <button class="control" type="button" data-size="128" aria-pressed="false">128</button>
+          <button class="control" type="button" data-size="192" aria-pressed="true">192</button>
+        </fieldset>
+        <fieldset>
+          <legend>투명 배경 확인</legend>
+          <button class="control" type="button" data-surface-choice="grid" aria-pressed="true">grid</button>
+          <button class="control" type="button" data-surface-choice="dark" aria-pressed="false">dark</button>
+          <button class="control" type="button" data-surface-choice="light" aria-pressed="false">light</button>
+        </fieldset>
+      </div>
+      <div class="meta"><span>READABILITY 100%</span><span>48×56</span></div>
+    </aside>
+    <section class="viewport" data-surface="grid" aria-label="Ember Sprite 투명 배경 미리보기">
+      <div class="desktop-strip"><span>BUILD SPIRIT</span><span>state: <b id="stateLabel">idle</b></span></div>
+      <div class="stage">
+        <div class="baseline"></div>
+        <div class="sprite-wrap"><canvas id="spiritCanvas" role="img" aria-label="공중에 떠 있는 작은 픽셀 불꽃 정령"></canvas></div>
+        <p class="caption">작은 메뉴 막대 옆에서도 얼굴과 상태가 먼저 보이는 비율.</p>
+      </div>
+    </section>
+  </main>
+  <script src="pixel-spirit.js"></script>
+</body>
+</html>
