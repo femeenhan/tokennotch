@@ -1,6 +1,7 @@
 import AppKit
 import SpriteKit
 import CoreText
+import CoreImage
 import SpiritCore
 
 /// Cutout rig on a 64pt stage; each part has its own pivot and motion.
@@ -73,6 +74,57 @@ final class SpiritScene: SKScene {
             gl_FragColor = vec4(mix(rgb, palette, min(1.0, u_charge * 2.0)) * source.a, source.a);
         }
         """, uniforms: [chargeUniform])
+    private let flameClock = SKUniform(name: "u_flameTime", float: 0)
+    private let flameEnergy = SKUniform(name: "u_flameEnergy", float: 1)
+    private let flameBend = SKUniform(name: "u_flameBend", float: 0)
+    private let flameLength = SKUniform(name: "u_flameLength", float: 1)
+    private let flameCooling = SKUniform(name: "u_flameCooling", float: 0)
+    private lazy var pixelFlameShader = SKShader(source: """
+        void main() {
+            // One cell is about 1pt in the 64pt rig, half the old atlas step.
+            // Quantize the OUTPUT: bending a coarse source alone cannot add detail.
+            vec2 grid = vec2(42.0, 39.0);
+            vec2 p = (floor(v_tex_coord * grid) + 0.5) / grid;
+            float rise = smoothstep(0.22, 0.92, p.y);
+            float t = u_flameTime;
+            float wave = sin(t * 3.8 - p.y * 10.0 + p.x * 3.0);
+            float curl = sin(t * 6.1 - p.y * 14.0 - p.x * 7.0);
+            vec2 q = p;
+            q.x -= rise * (u_flameBend * 0.65
+                + u_flameEnergy * (0.043 * wave + 0.018 * curl));
+            q.y -= rise * ((u_flameLength - 1.0) * 0.45
+                + u_flameEnergy * 0.025 * sin(t * 4.5 - p.y * 8.0 + p.x * 13.0));
+            vec4 edge = texture2D(u_texture, q);
+            float inside = step(0.48, edge.a);
+            // Let the hotter color boundaries lick upward within the silhouette.
+            vec2 hot = q;
+            hot.x += u_flameEnergy * rise * 0.013 * sin(t * 5.0 - p.y * 13.0);
+            hot.y += u_flameEnergy * rise * 0.018 * sin(t * 3.6 - p.y * 11.0 + p.x * 9.0);
+            vec4 source = texture2D(u_texture, hot);
+            vec3 rgb = source.rgb / max(source.a, 0.001);
+            vec3 base;
+            vec3 gold;
+            vec3 blue;
+            if (rgb.g < 0.42) {
+                base = vec3(0.94, 0.15, 0.055);
+                gold = vec3(0.96, 0.45, 0.03);
+                blue = vec3(0.12, 0.38, 0.83);
+            } else if (rgb.g < 0.73) {
+                base = vec3(1.0, 0.53, 0.12);
+                gold = vec3(1.0, 0.72, 0.05);
+                blue = vec3(0.17, 0.67, 0.95);
+            } else {
+                base = vec3(1.0, 0.88, 0.38);
+                gold = vec3(1.0, 0.90, 0.45);
+                blue = vec3(0.54, 0.90, 1.0);
+            }
+            base = mix(base, vec3(0.78, 0.35, 0.12), u_flameCooling * 0.24);
+            vec3 charged = mix(gold, blue, smoothstep(0.72, 0.95, u_charge));
+            vec3 color = mix(base, charged, min(1.0, u_charge * 2.0));
+            gl_FragColor = vec4(color * inside, inside) * v_color_mix.a;
+        }
+        """, uniforms: [flameClock, flameEnergy, flameBend, flameLength, flameCooling, chargeUniform])
+
     private lazy var flyingFlameTexture = makeFlyingFlameTexture()
     private var particles: [(node: SKSpriteNode, age: Double, vx: Double, vy: Double, life: Double, gravity: Double)] = []
     private(set) var spiritState: SpiritState = .idle
@@ -141,12 +193,24 @@ final class SpiritScene: SKScene {
         let headPart = part(CGRect(x: 104, y: 53, width: 495, height: 480), scale: unit)
         head.texture = headPart.texture
         head.size = headPart.size
+        // Smooth the old large stairs into a contour field, then rasterize them
+        // on the finer grid in the shader. Padding gives the tips room to rise.
+        if let atlasImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+           let crop = atlasImage.cropping(to: CGRect(x: 104, y: 53, width: 495, height: 480)) {
+            let field = CIImage(cgImage: crop).applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 11.0])
+            let bounds = CGRect(x: -42, y: 0, width: 579, height: 538)
+            if let smoothed = CIContext().createCGImage(field, from: bounds) {
+                head.texture = SKTexture(cgImage: smoothed)
+                head.texture?.filteringMode = .linear
+                head.size = CGSize(width: bounds.width * unit, height: bounds.height * unit)
+                head.shader = pixelFlameShader
+            }
+        }
         head.anchorPoint = CGPoint(x: 0.5, y: 0)
         head.position = CGPoint(x: 0, y: 197 * unit)
         head.zPosition = 2
-        head.subdivisionLevels = 3
         body.addChild(head)
-        flameParts.append(head)
+        if head.shader == nil { flameParts.append(head) }
         aura.name = "chargeAura"
         aura.texture = head.texture
         aura.size = head.size
@@ -384,24 +448,12 @@ final class SpiritScene: SKScene {
         body.alpha = 1
         heldEmber.alpha = pose.heldEmber
         heldEmber.setScale(0.6 + pose.heldEmber * 0.4)
-        // Keep the lower face rigid. Only the upper flame flows through this mesh.
-        let count = 6
-        var source: [SIMD2<Float>] = []
-        var destination: [SIMD2<Float>] = []
-        for row in 0...count {
-            for column in 0...count {
-                let x = Float(column) / Float(count)
-                let y = Float(row) / Float(count)
-                let weight = max(0, (y - 0.68) / 0.32)
-                source.append(SIMD2(x, y))
-                let ripple = reducedMotion ? Float(0) : 0.012 * sin(Float(flameTime) * 5 + x * 13) * weight * weight
-                destination.append(SIMD2(x + Float(pose.flameSway) * weight * weight + ripple,
-                                         y + Float(pose.flameStretch - 1) * weight * 0.65))
-            }
-        }
-        head.warpGeometry = SKWarpGeometryGrid(columns: count, rows: count,
-                                              sourcePositions: source, destinationPositions: destination)
-        aura.warpGeometry = head.warpGeometry
+        flameClock.floatValue = Float(flameTime)
+        flameEnergy.floatValue = reducedMotion ? 0
+            : Float((0.55 + 0.45 * pose.vitality) * (1 - 0.65 * pose.restAmount))
+        flameBend.floatValue = Float(pose.flameSway)
+        flameLength.floatValue = Float(pose.flameStretch)
+        flameCooling.floatValue = Float(cooling)
     }
 
     /// A tiny cutout flame with an orange silhouette, golden core and cream tip.

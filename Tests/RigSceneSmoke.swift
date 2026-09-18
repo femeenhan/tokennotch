@@ -1,5 +1,6 @@
 import AppKit
 import SpriteKit
+import ImageIO
 import SpiritCore
 
 /// Compile alongside SpiritScene.swift; exercises the real renderer, not a mock.
@@ -233,6 +234,56 @@ struct RigSceneSmoke {
         }
         require(emitterBands.count >= 4, "Embers must originate at feet, shoulders, temples and crown")
         require(comparisonCaptures == 24, "All 24 actual-size background comparisons must be written")
+        // Measure the rendered flame itself, excluding breathing, blinking and particles.
+        // A moving rig must not pass this test with an unchanged fire texture.
+        let fire = SpiritScene(size: CGSize(width: 160, height: 160))
+        fire.provider = .codex
+        fire.tracksPointer = false
+        view.frame = CGRect(x: 0, y: 0, width: 160, height: 160)
+        view.presentScene(fire)
+        view.isPaused = true
+        let fireHead = fire.childNode(withName: "//head") as! SKSpriteNode
+        let probe = SKSpriteNode(texture: fireHead.texture, size: CGSize(width: 336, height: 312))
+        probe.shader = fireHead.shader
+        func cells() -> [Int] {
+            let bitmap = NSBitmapImageRep(cgImage: view.texture(from: probe)!.cgImage())
+            return (0..<39).flatMap { row in
+                (0..<42).map { column in
+                    let color = bitmap.colorAt(x: (column * 2 + 1) * bitmap.pixelsWide / 84,
+                                               y: (row * 2 + 1) * bitmap.pixelsHigh / 78)!
+                    return color.alphaComponent < 0.5 ? 0
+                        : 1 + Int(color.greenComponent * 255)
+                }
+            }
+        }
+        let gifURL = output.appendingPathComponent("fine-dot-flame-160.gif")
+        let gif = CGImageDestinationCreateWithURL(gifURL as CFURL, "com.compuserve.gif" as CFString, 30, nil)!
+        CGImageDestinationSetProperties(gif, [kCGImagePropertyGIFDictionary:
+            [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+        var firstCells: [Int] = []
+        var silhouetteChanges = 0
+        var colorChanges = 0
+        for frame in 0..<120 {
+            fire.update(Double(frame) / 60)
+            if frame.isMultiple(of: 4) {
+                let next = cells()
+                if firstCells.isEmpty { firstCells = next }
+                silhouetteChanges = max(silhouetteChanges, zip(firstCells, next).filter { ($0 == 0) != ($1 == 0) }.count)
+                colorChanges = max(colorChanges, zip(firstCells, next).filter { $0 > 0 && $1 > 0 && $0 != $1 }.count)
+                let frameImage = view.texture(from: fire, crop: view.bounds)!.cgImage()
+                CGImageDestinationAddImage(gif, frameImage, [kCGImagePropertyGIFDictionary:
+                    [kCGImagePropertyGIFDelayTime: 4.0 / 60]] as CFDictionary)
+            }
+        }
+        require(CGImageDestinationFinalize(gif), "Flame animation preview must be written")
+        require(silhouetteChanges >= 25, "Idle fire must visibly reshape its outline on the fine grid")
+        require(colorChanges >= 25, "Hot inner layers must flow independently of the rigid face")
+        fire.render(state: .idle, reduceMotion: true)
+        fire.update(2)
+        let frozenCells = cells()
+        for frame in 1...60 { fire.update(2 + Double(frame) / 60) }
+        require(cells() == frozenCells, "Reduce Motion must freeze the rendered flame pixels")
+        print("PASS: fine flame silhouette changes \(silhouetteChanges) cells; hot layers change \(colorChanges) cells; reduced motion freezes pixels")
         print("PASS: independent rig, hammer arc, idle recovery, reduced motion; snapshots: \(output.path)")
     }
 }
