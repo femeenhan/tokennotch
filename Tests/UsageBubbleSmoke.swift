@@ -7,21 +7,18 @@ import SpiritCore
 enum UsageBubbleSmoke {
     static func main() throws {
         _ = NSApplication.shared
-        let rect = CGRect(x: 0, y: 0, width: 240, height: 156)
-        let left = PixelSpeechBubble(tailOnLeft: true, tailY: 78).path(in: rect)
-        let right = PixelSpeechBubble(tailOnLeft: false, tailY: 78).path(in: rect)
-        // Offset the 6-point grid from polygon edges: boundary containment is
-        // winding-direction dependent and not an interior geometry assertion.
-        for x in stride(from: CGFloat(0.25), through: rect.maxX - 0.25, by: 6) {
-            for y in stride(from: CGFloat(0.25), through: rect.maxY - 0.25, by: 6) {
+        let rect = CGRect(origin: .zero, size: QuotaQuickView.size)
+        let left = SpiritSpeechView.bubblePath(size: rect.size, tailOnLeft: true, tailY: 48)
+        let right = SpiritSpeechView.bubblePath(size: rect.size, tailOnLeft: false, tailY: 48)
+        for x in stride(from: CGFloat(0.25), through: rect.maxX - 0.25, by: 2) {
+            for y in stride(from: CGFloat(0.25), through: rect.maxY - 0.25, by: 2) {
                 precondition(left.contains(CGPoint(x: x, y: y)) == right.contains(CGPoint(x: rect.maxX - x, y: y)), "Tail mirror mismatch")
             }
         }
-        precondition(left.contains(CGPoint(x: 120, y: 78)), "Body must contain its center")
-        precondition(!left.contains(CGPoint(x: 0, y: 0)), "Corner must remain outside")
-        precondition(left.contains(CGPoint(x: 6, y: 75)), "Left tail must contain its stepped tip")
-        precondition(right.contains(CGPoint(x: 234, y: 75)), "Right tail must mirror the tip")
-        precondition(!left.contains(CGPoint(x: 6, y: 86)), "Tail step must exclude space beneath its tip")
+        precondition(left.contains(CGPoint(x: rect.midX, y: rect.midY)))
+        precondition(!left.contains(.zero))
+        precondition(left.contains(CGPoint(x: 5, y: 48)))
+        precondition(right.contains(CGPoint(x: rect.maxX - 5, y: 48)))
 
         let panel = UsageBubblePanel(contentRect: rect, styleMask: [.borderless], backing: .buffered, defer: false)
         var dismissals = 0
@@ -35,23 +32,23 @@ enum UsageBubbleSmoke {
 
         let model = CompanionModel()
         model.quotaHasSuccessfulRead = true
-        let states: [(name: String, used: Double?)] = [("", 68), ("zero", 100), ("full", 0), ("pending", nil)]
+        let states: [(name: String, used: Double?)] = [("", 68), ("zero", 100), ("full", 0), ("decimal", 0.1), ("stale", 68), ("pending", nil)]
         for state in states {
         model.quota = state.used.map { used in
-            QuotaSnapshot(observedAt: Date(), buckets: [QuotaBucket(id: "codex", secondary: QuotaWindow(usedPercent: used, windowDurationMins: 10080))])
+            QuotaSnapshot(observedAt: Date().addingTimeInterval(state.name == "stale" ? -600 : 0), buckets: [QuotaBucket(id: "codex", secondary: QuotaWindow(usedPercent: used, windowDurationMins: 10080))])
         }
         for scheme in [ColorScheme.light, .dark] {
             panel.isOpaque = false
             panel.backgroundColor = .clear
             panel.hasShadow = false
             panel.appearance = NSAppearance(named: scheme == .light ? .aqua : .darkAqua)
-            let host = NSHostingView(rootView: QuotaQuickView(model: model, openDashboard: {}, tailY: 78).preferredColorScheme(scheme))
+            let host = NSHostingView(rootView: QuotaQuickView(model: model, openDashboard: {}, tailY: 48).preferredColorScheme(scheme))
             panel.contentView = host
             panel.display()
             host.layoutSubtreeIfNeeded()
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-            precondition(host.bounds.size == CGSize(width: 240, height: 156), "Native usage host must be exactly 240x156; actual \(host.bounds.size)")
-            precondition(host.fittingSize == CGSize(width: 240, height: 156), "Content must not demand an oversized native layout")
+            precondition(host.bounds.size == QuotaQuickView.size, "Native usage host must be exactly 188x96; actual \(host.bounds.size)")
+            precondition(host.fittingSize == QuotaQuickView.size, "Content must not demand an oversized native layout")
             let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
             host.cacheDisplay(in: host.bounds, to: bitmap)
             precondition((bitmap.colorAt(x: 0, y: 0)?.alphaComponent ?? 1) < 0.01, "Bubble corner must be transparent")
@@ -64,6 +61,6 @@ enum UsageBubbleSmoke {
         }
         }
         panel.close()
-        print("PASS: pixel bubble mirrors in 6-point steps, body/tail/corners, native Escape, transparent light/dark rendering")
+        print("PASS: shared rounded bubble geometry, compact layout, native Escape, transparent light/dark rendering across quota states")
     }
 }

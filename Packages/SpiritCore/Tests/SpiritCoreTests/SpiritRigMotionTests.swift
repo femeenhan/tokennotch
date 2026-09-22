@@ -3,6 +3,174 @@ import Testing
 
 @Suite("Procedural spirit rig")
 struct SpiritRigMotionTests {
+    @Test func draggingDuringCompletionDoesNotResumeAnInterruptedJump() {
+        var motion = SpiritRigMotion()
+        motion.setState(.completed)
+        for _ in 0..<60 { _ = motion.advance(by: 1.0 / 60) }
+        #expect(motion.pose.bodyOffsetY > 2)
+        motion.setDragging(true)
+        for _ in 0..<60 { _ = motion.advance(by: 1.0 / 60) }
+        motion.setDragging(false)
+        let afterRelease = (0..<120).map { _ in motion.advance(by: 1.0 / 60) }
+        #expect(afterRelease.allSatisfy { $0.expression != .proud })
+        #expect(afterRelease.allSatisfy { $0.bodyOffsetY < 1 })
+    }
+
+    @Test func heldDragStretchesEvenWhenPointerStopsAndReleaseSettles() {
+        var motion = SpiritRigMotion()
+        motion.setDragging(true)
+        motion.setDragVelocity(x: 180, y: 120)
+        for _ in 0..<30 { _ = motion.advance(by: 1.0 / 60) }
+        motion.setDragVelocity(x: 0, y: 0)
+        for _ in 0..<30 { _ = motion.advance(by: 1.0 / 60) }
+        #expect(motion.pose.expression == .surprised)
+        #expect(motion.pose.bodyScaleY > 1.12)
+        #expect(motion.pose.bodyScaleX < 0.96)
+        #expect(!motion.canPlayIdleAction)
+        motion.setDragging(false)
+        let released = (0..<180).map { _ in motion.advance(by: 1.0 / 60) }
+        #expect(released.contains { $0.bodyScaleY < 0.99 })
+        #expect(abs(released.last!.bodyScaleY - 1) < 0.02)
+        #expect(released.last!.expression == .neutral)
+        #expect(motion.canPlayIdleAction)
+    }
+
+    @Test func idleActionsYieldToPettingAndDoNotStackHabits() {
+        var motion = SpiritRigMotion()
+        #expect(motion.canPlayIdleAction)
+        motion.setIdleActionActive(true)
+        let reserved = (0..<900).map { _ in motion.advance(by: 1.0 / 60) }
+        #expect(reserved.allSatisfy { $0.heldEmber == 0 && $0.mouthOpen == 1 })
+        #expect(!motion.canPlayIdleAction)
+        motion.setIdleActionActive(false)
+        motion.setPointer(x: 8, y: 45, velocityX: 30)
+        #expect(!motion.canPlayIdleAction)
+        for _ in 0..<60 { _ = motion.advance(by: 1.0 / 60) }
+        #expect(motion.pose.expression == .content)
+        #expect(motion.pose.heldEmber == 0)
+    }
+
+    @Test func interruptedCompletionDoesNotCelebrateDuringNewWork() {
+        var motion = SpiritRigMotion()
+        motion.setState(.completed)
+        for _ in 0..<10 { _ = motion.advance(by: 1.0 / 60) }
+        motion.setState(.working)
+        let frames = (0..<180).map { _ in motion.advance(by: 1.0 / 60) }
+        #expect(frames.allSatisfy { !$0.didCelebrate && $0.expression != .proud })
+        #expect(frames.filter(\.didStrike).count == 2)
+    }
+
+    @Test func pettingShowsContentmentInsteadOfFatigueAndRelaxesAfterLeaving() {
+        var motion = SpiritRigMotion()
+        for _ in 0..<60 {
+            motion.setPointer(x: 8, y: 45, velocityX: 30)
+            _ = motion.advance(by: 1.0 / 60)
+        }
+        #expect(motion.pose.expression == .content)
+        #expect(motion.pose.bodyScaleX > 1.03)
+        #expect(motion.pose.bodyScaleY < 0.97)
+        motion.setPointer(x: nil, y: nil)
+        for _ in 0..<300 { _ = motion.advance(by: 1.0 / 60) }
+        #expect(motion.pose.expression == .neutral)
+        #expect(abs(motion.pose.bodyScaleX - 1) < 0.02)
+    }
+
+    @Test func completionLooksProudThenReturnsToNeutralWithoutRepeating() {
+        var motion = SpiritRigMotion()
+        motion.setState(.completed)
+        let frames = (0..<240).map { _ in motion.advance(by: 1.0 / 60) }
+        #expect(frames.contains { $0.expression == .focused })
+        #expect(frames.contains { $0.expression == .proud })
+        #expect(frames.contains { $0.bodyScaleY < 0.94 })
+        #expect(frames.contains { $0.bodyOffsetY > 2 })
+        #expect(frames.filter(\.didCelebrate).count == 1)
+        #expect(frames.last!.expression == .neutral)
+    }
+
+    @Test func completionWaitsForTheLastHammerStrokeBeforeCelebrating() {
+        var motion = SpiritRigMotion()
+        motion.setState(.working)
+        for _ in 0..<20 { _ = motion.advance(by: 1.0 / 60) }
+        motion.setState(.completed)
+        var celebrations = 0
+        for _ in 0..<240 {
+            let pose = motion.advance(by: 1.0 / 60)
+            if pose.didCelebrate {
+                #expect(!motion.isForging, "Finish the raised hammer before the proud reaction")
+                celebrations += 1
+            }
+        }
+        #expect(celebrations == 1)
+    }
+
+    @Test func pettingAccumulatesByTimeRatherThanPointerEventFrequency() {
+        func petted(at fps: Int) -> SpiritRigPose {
+            var motion = SpiritRigMotion()
+            for _ in 0..<(fps / 3) {
+                motion.setPointer(x: 8, y: 45, velocityX: 30)
+                _ = motion.advance(by: 1.0 / Double(fps))
+            }
+            return motion.pose
+        }
+        let slow = petted(at: 30)
+        let fast = petted(at: 120)
+        #expect(abs(slow.eyeOpen - fast.eyeOpen) < 0.05)
+        #expect(abs(slow.bodyOffsetY - fast.bodyOffsetY) < 0.1)
+    }
+
+    @Test func emberIntervalsVaryWhileKeepingStateDensityAndFrameRateIndependence() {
+        func emissionFrames(state: SpiritState, fps: Int) -> [Int] {
+            var motion = SpiritRigMotion()
+            motion.setState(state)
+            return (0..<(fps * 30)).filter { _ in motion.advance(by: 1.0 / Double(fps)).didEmitEmber }
+        }
+        for state: SpiritState in [.idle, .working] {
+            let frames = emissionFrames(state: state, fps: 120)
+            let gaps = zip(frames.dropFirst(), frames).map { $0 - $1 }
+            #expect(Double(gaps.max()!) / Double(gaps.min()!) > 1.5)
+            #expect(abs(frames.count - emissionFrames(state: state, fps: 30).count) <= 1)
+            #expect(frames == emissionFrames(state: state, fps: 120))
+            #expect(state == .working ? (85...102).contains(frames.count) : (14...19).contains(frames.count))
+        }
+    }
+
+    @Test func depletedAndSleepingSpiritsEmitFewerEmbers() {
+        func emissionCount(state: SpiritState, quota: Double) -> Int {
+            var motion = SpiritRigMotion()
+            motion.setRemainingQuota(quota)
+            motion.setState(state)
+            for _ in 0..<600 { _ = motion.advance(by: 1.0 / 60) }
+            return (0..<1800).filter { _ in motion.advance(by: 1.0 / 60).didEmitEmber }.count
+        }
+        #expect(emissionCount(state: .working, quota: 0.05) < emissionCount(state: .working, quota: 1) * 4 / 5)
+        #expect(emissionCount(state: .sleeping, quota: 1) < emissionCount(state: .idle, quota: 1) * 3 / 4)
+    }
+
+    @Test func blinkClosesBrieflyThenReopensMoreSlowly() {
+        var motion = SpiritRigMotion()
+        let frames = (0..<470).map { _ in motion.advance(by: 0.01).eyeOpen }
+        let firstClosed = frames.firstIndex { $0 < 0.01 }!
+        let lastClosed = frames.lastIndex { $0 < 0.01 }!
+        let closingStart = frames.firstIndex { $0 < 0.99 }!
+        let reopeningEnd = frames[(lastClosed + 1)...].firstIndex { $0 > 0.99 }!
+        #expect(lastClosed - firstClosed >= 2)
+        #expect(reopeningEnd - lastClosed > firstClosed - closingStart)
+        #expect(reopeningEnd - closingStart < 30)
+    }
+
+    @Test func forgeArmAndSquashRemainContinuousAcrossMotionPhases() {
+        for boundary in [0.45, 0.57] {
+            var motion = SpiritRigMotion()
+            motion.setState(.working)
+            // Sample either side of the same boundary at sub-frame precision.
+            for _ in 0..<(Int((boundary * 100).rounded()) - 1) { _ = motion.advance(by: 0.01) }
+            let before = motion.advance(by: 0.0099)
+            let after = motion.advance(by: 0.0002)
+            #expect(abs(after.freeArmAngle - before.freeArmAngle) < 0.002)
+            #expect(abs(after.bodyScaleY - before.bodyScaleY) < 0.002)
+        }
+    }
+
     @Test func idleKeepsHammerStillWhileFlameBreathAndEyesMove() {
         var motion = SpiritRigMotion()
         let frames = (0..<600).map { _ in motion.advance(by: 1.0 / 60) }
@@ -15,7 +183,7 @@ struct SpiritRigMotionTests {
     @Test func workingWindsUpStrikesOnceAndRecovers() {
         var motion = SpiritRigMotion()
         motion.setState(.working)
-        let frames = (0..<90).map { _ in motion.advance(by: 1.0 / 60) }
+        let frames = (0..<123).map { _ in motion.advance(by: 1.0 / 60) }
         #expect(frames.contains { $0.hammerAngle < -0.5 })
         #expect(frames.contains { $0.hammerAngle > 1 })
         #expect(frames.filter(\.didStrike).count == 1)
@@ -76,14 +244,14 @@ struct SpiritRigMotionTests {
                 let p = motion.advance(by: 1.0 / 60)
                 #expect([p.hammerAngle, p.bodyOffsetY, p.bodyScaleY, p.headAngle,
                          p.flameSway, p.flameStretch, p.eyeOpen, p.gazeX,
-                         p.freeArmAngle, p.impact].allSatisfy { $0.isFinite })
+                         p.freeArmAngle, p.impact, p.bodyScaleX, p.bodyAngle].allSatisfy { $0.isFinite })
                 #expect((0...1).contains(p.impact) && (0...1).contains(p.eyeOpen))
             }
         }
     }
 
     @Test func existingFeedbackStatesRetainTheirOwnGestureWithoutSnapping() {
-        for state: SpiritState in [.attention, .completed, .error, .greeting] {
+        for state: SpiritState in [.attention, .error, .greeting] {
             var idle = SpiritRigMotion()
             var feedback = SpiritRigMotion()
             for _ in 0..<30 {
@@ -245,7 +413,7 @@ struct SpiritRigMotionTests {
     @Test func idleHabitsAppearOccasionallyBeforeLongIdleSettlesToSleep() {
         var motion = SpiritRigMotion()
         let earlyIdle = (0..<3_000).map { _ in motion.advance(by: 1.0 / 60) }
-        #expect(earlyIdle.contains { $0.heldEmber > 0.5 })
+        #expect(earlyIdle.contains { $0.playEmberOpacity > 0.5 })
         for _ in 0..<600 { _ = motion.advance(by: 1.0 / 60) }
         #expect(motion.pose.eyeOpen < 0.2)
         #expect(motion.pose.emberGlow < 0.85)
@@ -315,8 +483,10 @@ struct SpiritRigMotionTests {
         #expect(frames.filter(\.didStrike).count == 2)
         let chargedRelease = motion.endPress(registerTap: true)
         #expect(chargedRelease)
-        motion.setDragVelocity(x: 250, y: 120)
-        for _ in 0..<60 { _ = motion.advance(by: 1.0 / 60) }
+        for _ in 0..<60 {
+            motion.setDragVelocity(x: 250, y: 120)
+            _ = motion.advance(by: 1.0 / 60)
+        }
         #expect(motion.pose.dragLean < -0.2)
         motion.setDragVelocity(x: 0, y: 0)
         for _ in 0..<180 { _ = motion.advance(by: 1.0 / 60) }

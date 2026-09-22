@@ -23,6 +23,8 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
     private var alertPanel: NSPanel?
     private var presentedAlertID: UUID?
     private var heartbeat: Timer?
+    private var typingTimer: Timer?
+    private var typingActivity = TypingActivity()
     private var sleeping = false
     private var screensAsleep = false
     private var sessionInactive = false
@@ -57,6 +59,11 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
             companions[provider] = panel
         }
         companion = companions[.codex]
+        sampleTypingActivity()
+        typingTimer = Timer(timeInterval: 0.15, target: self,
+                            selector: #selector(sampleTypingActivity), userInfo: nil, repeats: true)
+        typingTimer?.tolerance = 0.03
+        if let typingTimer { RunLoop.main.add(typingTimer, forMode: .common) }
         model.onAppearanceChange = { [weak self] in self?.updateAppearance() }
         model.onAlertChange = { [weak self] in self?.updateAlertPresentation() }
         var socketURL = SpiritSocketLocation.defaultURL
@@ -144,6 +151,16 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
 
     @objc private func screensChanged() { companions.values.forEach { $0.correctPosition() }; tick() }
 
+    @objc private func sampleTypingActivity() {
+        let active = typingActivity.sample(
+            count: CGEventSource.counterForEventType(.combinedSessionState, eventType: .keyDown),
+            at: ProcessInfo.processInfo.systemUptime,
+            enabled: !suspended && model.isShown)
+        for panel in companions.values {
+            panel.spiritScene.setTypingActive(active && panel.isVisible)
+        }
+    }
+
     @objc private func tick() {
         if !suspended { fullscreenLikely = frontmostWindowCoversScreen(); model.checkDeadlines(); model.pollUsage(); model.refreshQuota() }
         let weekly = [model.generalQuotaBucket?.primary, model.generalQuotaBucket?.secondary].compactMap { $0 }.first { $0.windowDurationMins == 10080 }
@@ -223,6 +240,7 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
     func menuWillOpen(_ menu: NSMenu) { rebuildMenu(menu) }
 
     private func rebuildMenu(_ menu: NSMenu) {
+        menu.autoenablesItems = false
         menu.removeAllItems()
         let title = NSMenuItem(title: "빌드정령", action: nil, keyEquivalent: "")
         title.isEnabled = false
@@ -260,6 +278,10 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
         sizes.submenu = sizeMenu
         menu.addItem(sizes)
         menu.addItem(.separator())
+        let canPlayHammerTrick = canPlayCurrentHammerTrick
+        addItem("망치 던져 받기", action: #selector(tossHammer), to: menu).isEnabled = canPlayHammerTrick
+        addItem("망치 불러 잡기", action: #selector(recallHammer), to: menu).isEnabled = canPlayHammerTrick
+        menu.addItem(.separator())
         if let timer = model.focusTimer, timer.deliveredAt == nil {
             let remaining = max(0, Int(ceil(timer.deadline.timeIntervalSinceNow / 60)))
             addItem("집중 타이머 취소 (약 \(remaining)분 남음)", action: #selector(cancelFocus), to: menu)
@@ -289,6 +311,20 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
     }
 
     @objc private func hideCurrentProvider() { model.setProviderVisible(menuProvider, visible: false) }
+    private var canPlayCurrentHammerTrick: Bool {
+        guard model.isShown, model.visibleProviders.contains(menuProvider),
+              let companion = companions[menuProvider], companion.isVisible else { return false }
+        return companion.spiritScene.canPlayHammerTrick
+    }
+
+    @objc private func tossHammer() { playCurrentHammerTrick(.toss) }
+    @objc private func recallHammer() { playCurrentHammerTrick(.recall) }
+
+    private func playCurrentHammerTrick(_ trick: HammerTrick) {
+        guard canPlayCurrentHammerTrick else { return }
+        companions[menuProvider]?.spiritScene.playHammerTrick(trick)
+    }
+
     @objc private func toggleShown() { model.isShown.toggle() }
     @objc private func changeSize(_ sender: NSMenuItem) { model.setSize(Double(sender.tag), for: menuProvider) }
     @objc private func toggleProvider(_ sender: NSMenuItem) {
@@ -301,7 +337,7 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
 
     @objc private func openMotionReview() {
         if motionReviewWindow == nil {
-            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 520, height: 780),
+            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 520, height: 820),
                 styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
             window.title = "빌드정령 기본 동작"
             window.delegate = self
@@ -544,6 +580,7 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
         model.quotaTask?.cancel()
         hookServer?.stop()
         heartbeat?.invalidate()
+        typingTimer?.invalidate()
         companions.values.forEach { $0.setRendering(active: false) }
         NotificationCenter.default.removeObserver(self)
         NSWorkspace.shared.notificationCenter.removeObserver(self)

@@ -237,78 +237,85 @@ struct PixelMeter: View {
 }
 
 struct QuotaQuickView: View {
-    static let size = CGSize(width: 240, height: 156)
+    static let size = CGSize(width: 188, height: 96)
     @ObservedObject var model: CompanionModel
     var provider: SpiritProvider = .codex
     let openDashboard: () -> Void
     var tailOnLeft = true
-    var tailY: CGFloat = 78
+    var tailY: CGFloat = 48
+
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             let weekly = provider == .codex ? [model.generalQuotaBucket?.primary, model.generalQuotaBucket?.secondary]
                 .compactMap { $0 }.first { $0.windowDurationMins == 10080 } : nil
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text(provider == .codex ? "주간 남은 양" : provider.displayName).font(DashboardTheme.pixel(12))
-                    Spacer()
-                    if weekly != nil && !model.quotaIsFresh(at: context.date) {
-                        Text("이전 값").font(.system(size: 11)).foregroundStyle(.secondary)
-                    }
-                }
+            VStack(alignment: .leading, spacing: 6) {
                 if provider == .codex {
-                PixelText(weekly?.remainingPercent.map {
-                    $0.formatted(.number.precision(.fractionLength(0...1))) + "%"
-                } ?? "확인 대기", size: weekly?.remainingPercent == nil ? 24 : 40)
-                if let remaining = weekly?.remainingPercent {
-                    PixelMeter(remaining: remaining).frame(height: 6)
-                }
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text("주간 잔여").font(.system(size: 12, weight: .medium))
+                        Spacer(minLength: 0)
+                        Text(weekly?.remainingPercent.map {
+                            $0.formatted(.number.precision(.fractionLength(0...1))) + "%"
+                        } ?? "확인 대기")
+                        .font(.system(size: weekly?.remainingPercent == nil ? 12 : 19, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                    }
+                    GeometryReader { geometry in
+                        Capsule().fill(Color(nsColor: SpiritSpeechView.ink).opacity(0.1))
+                        if let remaining = weekly?.remainingPercent {
+                            Capsule().fill(Color(nsColor: SpiritSpeechView.outline))
+                                .frame(width: geometry.size.width * min(100, max(0, remaining)) / 100)
+                        }
+                    }.frame(height: 4)
+                        .accessibilityLabel("주간 남은 한도 \(weekly?.remainingPercent.map { String(format: "%.1f%%", $0) } ?? "미확인")")
                 } else {
-                    Text(model.providerStatus(for: provider)).font(.system(size: 12)).lineLimit(2)
-                    Text("계정 사용량 조회 미지원").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(provider.displayName).font(.system(size: 12, weight: .semibold))
+                    Text(model.providerStatus(for: provider)).font(.system(size: 11)).lineLimit(1)
+                        .help(model.providerStatus(for: provider))
                 }
-                Button("대시보드 열기", action: openDashboard)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            }.padding(14)
-                .padding(.leading, tailOnLeft ? 20 : 0)
-                .padding(.trailing, tailOnLeft ? 0 : 20)
+                HStack(spacing: 4) {
+                    if provider != .codex {
+                        Text("조회 미지원").font(.system(size: 10))
+                    } else if weekly != nil && !model.quotaIsFresh(at: context.date) {
+                        Text("이전 값").font(.system(size: 10))
+                    }
+                    Spacer(minLength: 0)
+                    Button(action: openDashboard) {
+                        HStack(spacing: 3) {
+                            Text("대시보드")
+                            Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
+                        }.font(.system(size: 11, weight: .medium))
+                            .padding(.vertical, 4)
+                            .contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                        .accessibilityLabel("대시보드 열기")
+                }
+            }
+            .foregroundStyle(Color(nsColor: SpiritSpeechView.ink))
+            .padding(.horizontal, 22)
+            .padding(.vertical, 12)
         }.frame(width: Self.size.width, height: Self.size.height)
             .background {
-                let shape = PixelSpeechBubble(tailOnLeft: tailOnLeft, tailY: tailY)
-                shape.fill(Color.primary.opacity(0.18)).offset(x: 2, y: 2)
-                shape.fill(Color(nsColor: .windowBackgroundColor))
-                shape.stroke(Color.primary.opacity(0.75), style: StrokeStyle(lineWidth: 3, lineJoin: .miter))
+                CompanionBubbleBackground(tailOnLeft: tailOnLeft, tailY: tailY)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
-            .buttonStyle(PixelButtonStyle(fontSize: 12, horizontalPadding: 8, verticalPadding: 6))
     }
 }
 
-/// Integer-aligned, stepped corners and tail. No rounded popover chrome.
-struct PixelSpeechBubble: Shape {
+/// Reuse the character dialogue's native drawing, including its colors and tail.
+private struct CompanionBubbleBackground: NSViewRepresentable {
     var tailOnLeft: Bool
     var tailY: CGFloat
-    func path(in rect: CGRect) -> Path {
-        let w = rect.width, h = rect.height
-        let y = min(max(24, (tailY / 6).rounded() * 6), h - 24)
-        let points: [CGPoint] = [
-            CGPoint(x: 28, y: 2), CGPoint(x: w - 8, y: 2),
-            CGPoint(x: w - 8, y: 8), CGPoint(x: w - 2, y: 8),
-            CGPoint(x: w - 2, y: h - 8), CGPoint(x: w - 8, y: h - 8),
-            CGPoint(x: w - 8, y: h - 2), CGPoint(x: 28, y: h - 2),
-            CGPoint(x: 28, y: h - 8), CGPoint(x: 22, y: h - 8),
-            CGPoint(x: 22, y: y + 12), CGPoint(x: 16, y: y + 12),
-            CGPoint(x: 16, y: y + 6), CGPoint(x: 10, y: y + 6),
-            CGPoint(x: 10, y: y), CGPoint(x: 4, y: y),
-            CGPoint(x: 4, y: y - 6), CGPoint(x: 10, y: y - 6),
-            CGPoint(x: 10, y: y - 12), CGPoint(x: 22, y: y - 12),
-            CGPoint(x: 22, y: 8), CGPoint(x: 28, y: 8)
-        ]
-        var path = Path()
-        for (index, point) in points.enumerated() {
-            let mapped = CGPoint(x: rect.minX + (tailOnLeft ? point.x : w - point.x), y: rect.minY + point.y)
-            if index == 0 { path.move(to: mapped) } else { path.addLine(to: mapped) }
-        }
-        path.closeSubpath()
-        return path
+    func makeNSView(context: Context) -> SpiritSpeechView {
+        let view = SpiritSpeechView(frame: .zero)
+        view.message = ""
+        view.setAccessibilityElement(false)
+        return view
+    }
+    func updateNSView(_ view: SpiritSpeechView, context: Context) {
+        view.tailOnLeft = tailOnLeft
+        view.tailY = tailY
+        view.needsDisplay = true
     }
 }
 

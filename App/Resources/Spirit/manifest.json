@@ -3,6 +3,13 @@
   "assetStatus": "basic-cutout-rig",
   "source": "Selected low-detail pixel blacksmith spirit with a single hammer",
   "image": "smith-rig-atlas.png",
+  "editableSource": "SourceArt/Spirit/smith-rig.aseprite",
+  "hammerParts": "hammer-parts.png",
+  "hammerEditableSource": "SourceArt/Spirit/hammer-parts.aseprite",
+  "hammerTricks": [
+    "toss",
+    "recall"
+  ],
   "approvedReference": "smith-spirit.png",
   "defaultDisplaySizePoints": 128,
   "displaySizeRangePoints": [
@@ -11,7 +18,7 @@
   ],
   "productionSpriteSheet": false,
   "clips": [],
-  "motion": "Continuous independent head, eyes, shoulder/hammer and free-arm transforms; fine-grid flame silhouette and rising inner-color flow; strike-synchronized sparks; smooth forge recovery. Native 60Hz renderer. macOS Reduce Motion disables motion and particles.",
+  "motion": "Continuous independent head, eyes, shoulder/hammer and free-arm transforms; asymmetric blink timing; continuous pre-impact arm and body compression; fine-grid flame silhouette with a steadier face and rising inner-color flow; irregular contour-shed embers with three silhouettes, varied scale, curl and cooling; distance-spaced drag embers; strike-synchronized sparks; smooth forge recovery. Native 60Hz renderer. macOS Reduce Motion disables motion and particles.",
   "atlasSizePixels": [
     1254,
     1254
@@ -28,5 +35,13 @@
     "inputPanelBlackFillAlpha": 0.01,
     "technicalDebt": "Rig-sized rectangular input target covers body, head, flame and hammer with a small margin. Transparent gaps inside the target also receive clicks; outer window corners remain click-through. Not per-pixel silhouette routing."
   },
-  "limitations": "The flame is procedurally rendered on an approximately 1pt grid in the 64pt rig, using the original atlas contour. It is not an authored sprite-sheet animation. No anvil or impact sound."
+  "limitations": "The flame is procedurally rendered on an approximately 1pt grid in the 64pt rig, using the original atlas contour. It is not an authored sprite-sheet animation. No anvil or impact sound.",
+  "hammerPoseSheet": "hammer-keyposes.png",
+  "hammerPoseEditableSource": "SourceArt/Spirit/hammer-keyposes.aseprite",
+  "hammerToolSheet": "hero-hammer.png",
+  "hammerToolEditableSource": "SourceArt/Spirit/hero-hammer.aseprite",
+  "hammerToolGripBottomLeft": [
+    0.5,
+    0.3125
+  ]
 }

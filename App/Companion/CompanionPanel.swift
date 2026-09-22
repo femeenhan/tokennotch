@@ -9,7 +9,29 @@ final class CompanionPanel: NSPanel {
     private(set) lazy var interactionPanel = InteractionPanel()
     private(set) lazy var speechPanel = SpeechPanel()
     private(set) lazy var flameTrailPanel = FlameTrailPanel()
+    private(set) lazy var hammerFlightPanel = HammerFlightPanel()
     private var speechState: SpiritState?
+    private var speechExpiry: Timer?
+    private var speechIsCharge = false
+
+    @objc private func expireSpeech() { dismissSpeech() }
+
+    private func showSpeech(_ message: String?, charging: Bool = false) {
+        speechExpiry?.invalidate()
+        speechExpiry = nil
+        speechIsCharge = charging
+        speechPanel.speechView.message = message
+        positionSpeech()
+        if message != nil && renderingActive { speechPanel.orderFrontRegardless() }
+        else { speechPanel.orderOut(nil) }
+        // Long-running states should not leave dialogue pinned over the desktop.
+        if message != nil && !charging {
+            let timer = Timer(timeInterval: 3, target: self, selector: #selector(expireSpeech),
+                              userInfo: nil, repeats: false)
+            speechExpiry = timer
+            RunLoop.main.add(timer, forMode: .common)
+        }
+    }
     private var renderingActive = false
     var positionChanged: ((CGPoint) -> Void)?
     var clicked: (() -> Void)?
@@ -47,14 +69,28 @@ final class CompanionPanel: NSPanel {
         spiritScene.onTransform = { [weak self] in
             guard let self else { return }
             self.transformed?()
-            self.speechPanel.speechView.message = "으아아! 불꽃 충전!"
-            self.positionSpeech()
-            if self.renderingActive { self.speechPanel.orderFrontRegardless() }
+            self.showSpeech("으아아! 불꽃 충전!", charging: true)
+        }
+        spiritScene.onChargeEnded = { [weak self] in
+            guard let self, self.speechIsCharge else { return }
+            self.dismissSpeech()
+        }
+        spiritScene.onHammerFlight = { [weak self] flight in
+            guard let self else { return }
+            guard self.renderingActive, let flight else {
+                self.hammerFlightPanel.clear()
+                return
+            }
+            let viewPoint = self.spiritScene.convertPoint(toView: flight.position)
+            let windowPoint = self.spiritView.convert(viewPoint, to: nil)
+            let screenPoint = self.convertPoint(toScreen: windowPoint)
+            self.hammerFlightPanel.show(flight, at: screenPoint, above: self)
         }
         syncInteractionFrame()
     }
 
     func resize(to size: Double) {
+        interactionPanel.interactionView.cancelDrag()
         setContentSize(CGSize(width: size, height: size))
         syncInteractionFrame()
     }
@@ -63,9 +99,24 @@ final class CompanionPanel: NSPanel {
         interactionPanel.setFrame(CompanionGeometry.interactionFrame(
             visualOrigin: frame.origin, size: frame.width), display: true)
         positionSpeech()
+        let visible = screen?.visibleFrame
+            ?? NSScreen.screens.first(where: { $0.visibleFrame.intersects(frame) })?.visibleFrame
+            ?? NSScreen.main?.visibleFrame
+        if let visible {
+            let scale = max(0.1, spiritScene.characterScale)
+            let grip = CGPoint(x: frame.midX - 8 * scale, y: frame.minY + frame.height * 0.46)
+            let fromRight = visible.maxX - grip.x >= grip.x - visible.minX
+            let endX = fromRight ? visible.maxX + 50 : visible.minX - 50
+            let endY = min(visible.maxY - 24, grip.y + 65 * scale)
+            let overhead = max(0, visible.maxY - frame.minY - frame.height * 0.65 - 28 * scale)
+            spiritScene.hammerTossHeightScale = min(1, max(0, overhead / (55 * scale)))
+            spiritScene.hammerRecallOffset = CGPoint(x: (endX - grip.x) / scale,
+                                                     y: (endY - grip.y) / scale)
+        }
     }
 
     func move(to point: CGPoint) {
+        spiritScene.cancelHammerTrick()
         setFrameOrigin(point)
         syncInteractionFrame()
     }
@@ -80,21 +131,15 @@ final class CompanionPanel: NSPanel {
 
     func updateSpeech(state: SpiritState) {
         guard speechState != state else { return }
-        let previousState = speechState
         speechState = state
-        // Brief greetings/completion poses finish quickly; keep their words until tapped.
-        if state == .idle && previousState != .working && previousState != .attention && previousState != .error {
-            return
-        }
-        let message = state == .idle ? "언제든 불러 줘!" : SpeechPanel.message(for: state)
-        speechPanel.speechView.message = message
-        positionSpeech()
-        if message != nil && renderingActive { speechPanel.orderFrontRegardless() }
-        else { speechPanel.orderOut(nil) }
+        showSpeech(SpeechPanel.message(for: state))
     }
 
     @discardableResult
     func dismissSpeech() -> Bool {
+        speechExpiry?.invalidate()
+        speechExpiry = nil
+        speechIsCharge = false
         guard speechPanel.speechView.message != nil else { return false }
         speechPanel.speechView.message = nil
         speechPanel.orderOut(nil)
@@ -102,7 +147,12 @@ final class CompanionPanel: NSPanel {
     }
 
     private func positionSpeech() {
-        let placement = UsageBubblePlacement.place(characterFrame: frame,
+        let bodyBounds = spiritScene.speechAnchorBounds
+        let lower = spiritView.convert(spiritScene.convertPoint(toView: bodyBounds.origin), to: nil)
+        let upper = spiritView.convert(spiritScene.convertPoint(toView: CGPoint(x: bodyBounds.maxX, y: bodyBounds.maxY)), to: nil)
+        let anchor = convertToScreen(CGRect(x: min(lower.x, upper.x), y: min(lower.y, upper.y),
+                                            width: abs(upper.x - lower.x), height: abs(upper.y - lower.y)))
+        let placement = UsageBubblePlacement.place(characterFrame: anchor,
             visibleFrames: NSScreen.screens.map(\.visibleFrame), size: SpeechPanel.size)
         speechPanel.setFrame(placement.frame, display: true)
         speechPanel.speechView.tailOnLeft = placement.tailOnLeft
@@ -119,6 +169,9 @@ final class CompanionPanel: NSPanel {
             interactionPanel.orderFrontRegardless()
             if speechPanel.speechView.message != nil { speechPanel.orderFrontRegardless() }
         } else {
+            spiritScene.setProviderLabelVisible(false)
+            spiritScene.cancelHammerTrick()
+            hammerFlightPanel.clear()
             interactionPanel.interactionView.cancelDrag()
             flameTrailPanel.clear()
             interactionPanel.orderOut(nil)
@@ -168,26 +221,58 @@ final class InteractionView: NSView {
     private var dragStart: CGPoint?
     private var windowStart: CGPoint = .zero
     private var didDrag = false
+    private var pressedHammer = false
     private var previousDragPoint: CGPoint?
     private var previousDragTime: TimeInterval = 0
     override var acceptsFirstResponder: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    private var hoverTrackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        let area = NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverTrackingArea = area
+        if let window, window.isVisible {
+            companion?.spiritScene.setProviderLabelVisible(bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil)))
+        }
+    }
+
+    override func mouseEntered(with event: NSEvent) { companion?.spiritScene.setProviderLabelVisible(true) }
+    override func mouseExited(with event: NSEvent) { companion?.spiritScene.setProviderLabelVisible(false) }
+
     override func mouseDown(with event: NSEvent) {
-        dragStart = NSEvent.mouseLocation
+        dragStart = window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
         windowStart = companion?.frame.origin ?? .zero
         didDrag = false
         previousDragPoint = dragStart
         previousDragTime = event.timestamp
-        companion?.spiritScene.beginPress()
+        if let panel = companion {
+            let screenPoint = window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
+            let point = panel.spiritView.convert(panel.convertPoint(fromScreen: screenPoint), from: nil)
+            pressedHammer = panel.spiritScene.hammerContains(panel.spiritScene.convertPoint(fromView: point))
+                || panel.spiritScene.isHammerTrickPlaying
+            if !pressedHammer { panel.spiritScene.beginPress() }
+        }
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard let start = dragStart else { return }
-        let mouse = NSEvent.mouseLocation
+        let mouse = window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
+        if pressedHammer, let panel = companion {
+            if hypot(mouse.x - start.x, mouse.y - start.y) > 3 { didDrag = true }
+            if didDrag {
+                panel.spiritScene.pullHammer(progress: Double((start.x - mouse.x) / max(18, panel.frame.width * 0.18)))
+            }
+            return
+        }
         if !didDrag && hypot(mouse.x - start.x, mouse.y - start.y) > 3 {
             didDrag = true
             _ = companion?.spiritScene.endPress(registerTap: false)
+            companion?.spiritScene.setDragging(true)
         }
         guard didDrag, let panel = companion else { return }
         let elapsed = max(1.0 / 120, min(0.1, event.timestamp - previousDragTime))
@@ -210,8 +295,20 @@ final class InteractionView: NSView {
         let dragged = didDrag
         dragStart = nil
         previousDragPoint = nil
+        if pressedHammer && dragged {
+            pressedHammer = false
+            panel.spiritScene.releaseHammerPull()
+            return
+        }
         panel.spiritScene.setDragVelocity(x: 0, y: 0)
-        let charged = panel.spiritScene.endPress(registerTap: !dragged)
+        panel.spiritScene.setDragging(false)
+        let wasHammer = pressedHammer
+        pressedHammer = false
+        let charged = panel.spiritScene.endPress(registerTap: !dragged && !wasHammer)
+        if !dragged && wasHammer {
+            if event.clickCount == 2 { _ = panel.spiritScene.requestHammerToss() }
+            return
+        }
         if dragged { panel.correctPosition() }
         if !dragged && !charged && !panel.dismissSpeech() { panel.clicked?() }
     }
@@ -223,9 +320,9 @@ final class InteractionView: NSView {
     func cancelDrag() {
         dragStart = nil
         didDrag = false
+        pressedHammer = false
         previousDragPoint = nil
-        companion?.spiritScene.setDragVelocity(x: 0, y: 0)
-        _ = companion?.spiritScene.endPress(registerTap: false)
+        companion?.spiritScene.cancelInteractions()
     }
 }
 
@@ -233,7 +330,7 @@ final class InteractionView: NSView {
 /// A small nonactivating speech window keeps dialogue readable outside the sprite bounds.
 @MainActor
 final class SpeechPanel: NSPanel {
-    static let size = CGSize(width: 188, height: 70)
+    static let size = CGSize(width: 188, height: 44)
     static func message(for state: SpiritState) -> String? {
         switch state {
         case .idle: return nil
@@ -269,10 +366,32 @@ final class SpeechPanel: NSPanel {
 final class SpiritSpeechView: NSView {
     var message: String? {
         didSet {
+            dialogueImage = message.map(Self.renderDialogue)
             needsDisplay = true
             setAccessibilityLabel(message.map { "\($0). 눌러서 말풍선 닫기" })
         }
     }
+    private var dialogueImage: NSImage?
+
+    // This pixel font reports a zero global glyph bounding box to CoreText.
+    // Rasterize via point drawing, as PixelText and the spirit nameplate do,
+    // instead of relying on AppKit's rectangle-based text layout on screen.
+    private static func renderDialogue(_ message: String) -> NSImage {
+        let font = NSFont(name: "NeoDunggeunmo-Regular", size: 15)
+            ?? .systemFont(ofSize: 14, weight: .semibold)
+        let text = NSAttributedString(string: message, attributes: [
+            .font: font,
+            .foregroundColor: Self.ink
+        ])
+        let extent = text.size()
+        let image = NSImage(size: CGSize(width: max(1, ceil(extent.width) + 4),
+                                        height: max(1, ceil(extent.height) + 4)))
+        image.lockFocus()
+        text.draw(at: CGPoint(x: 2, y: 2))
+        image.unlockFocus()
+        return image
+    }
+
     var tailOnLeft = true
     var tailY: Double = 35
     var dismiss: (() -> Void)?
@@ -289,50 +408,74 @@ final class SpiritSpeechView: NSView {
     override func accessibilityPerformPress() -> Bool { dismiss?(); return true }
     override func mouseUp(with event: NSEvent) { dismiss?() }
 
+    static let ink = NSColor(calibratedRed: 0.29, green: 0.18, blue: 0.11, alpha: 1)
+    static let fill = NSColor(calibratedRed: 1, green: 0.95, blue: 0.82, alpha: 1)
+    static let outline = NSColor(calibratedRed: 0.46, green: 0.32, blue: 0.22, alpha: 1)
+
+    static func bubblePath(size: CGSize, tailOnLeft: Bool, tailY: CGFloat) -> NSBezierPath {
+        let width = size.width
+        let height = size.height
+        let tail = min(max(CGFloat(tailY), 17), height - 17)
+        // One continuous outline keeps the small tail joined cleanly to the rounded body.
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: tailOnLeft ? x : width - x, y: y)
+        }
+        let path = NSBezierPath()
+        let corner: CGFloat = 8
+        let control = corner * 0.55228475
+        let left: CGFloat = 10
+        let right = width - 10
+        let top: CGFloat = 2
+        let bottom = height - 2
+        path.move(to: point(left + corner, top))
+        path.line(to: point(right - corner, top))
+        path.curve(to: point(right, top + corner),
+                   controlPoint1: point(right - corner + control, top),
+                   controlPoint2: point(right, top + corner - control))
+        path.line(to: point(right, bottom - corner))
+        path.curve(to: point(right - corner, bottom),
+                   controlPoint1: point(right, bottom - corner + control),
+                   controlPoint2: point(right - corner + control, bottom))
+        path.line(to: point(left + corner, bottom))
+        path.curve(to: point(left, bottom - corner),
+                   controlPoint1: point(left + corner - control, bottom),
+                   controlPoint2: point(left, bottom - corner + control))
+        path.line(to: point(left, tail + 5))
+        path.line(to: point(3.5, tail + 0.8))
+        path.curve(to: point(3.5, tail - 0.8),
+                   controlPoint1: point(2.7, tail + 0.3),
+                   controlPoint2: point(2.7, tail - 0.3))
+        path.line(to: point(left, tail - 5))
+        path.line(to: point(left, top + corner))
+        path.curve(to: point(left + corner, top),
+                   controlPoint1: point(left, top + corner - control),
+                   controlPoint2: point(left + corner - control, top))
+        path.close()
+        return path
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        guard let message else { return }
+        guard message != nil else { return }
         let width = bounds.width
         let height = bounds.height
-        let tail = min(max(CGFloat(tailY), 17), height - 17)
-        // Pixel steps keep the bubble and its little tail in the sprite's visual language.
-        var points: [CGPoint] = [
-            CGPoint(x: 18, y: 2), CGPoint(x: width - 18, y: 2),
-            CGPoint(x: width - 18, y: 6), CGPoint(x: width - 14, y: 6),
-            CGPoint(x: width - 14, y: 10), CGPoint(x: width - 10, y: 10),
-            CGPoint(x: width - 10, y: height - 10), CGPoint(x: width - 14, y: height - 10),
-            CGPoint(x: width - 14, y: height - 6), CGPoint(x: width - 18, y: height - 6),
-            CGPoint(x: width - 18, y: height - 2), CGPoint(x: 18, y: height - 2),
-            CGPoint(x: 18, y: height - 6), CGPoint(x: 14, y: height - 6),
-            CGPoint(x: 14, y: height - 10), CGPoint(x: 10, y: height - 10),
-            CGPoint(x: 10, y: tail + 8), CGPoint(x: 6, y: tail + 8),
-            CGPoint(x: 6, y: tail + 4), CGPoint(x: 2, y: tail + 4),
-            CGPoint(x: 2, y: tail), CGPoint(x: 6, y: tail),
-            CGPoint(x: 6, y: tail - 4), CGPoint(x: 10, y: tail - 4),
-            CGPoint(x: 10, y: 10), CGPoint(x: 14, y: 10),
-            CGPoint(x: 14, y: 6), CGPoint(x: 18, y: 6)
-        ]
-        if !tailOnLeft { points = points.map { CGPoint(x: width - $0.x, y: $0.y) } }
-        let path = NSBezierPath()
-        path.move(to: points[0])
-        for point in points.dropFirst() { path.line(to: point) }
-        path.close()
-        NSColor(calibratedRed: 1, green: 0.95, blue: 0.82, alpha: 1).setFill()
+        let path = Self.bubblePath(size: bounds.size, tailOnLeft: tailOnLeft, tailY: tailY)
+        Self.fill.setFill()
         path.fill()
-        NSColor(calibratedRed: 0.37, green: 0.23, blue: 0.14, alpha: 1).setStroke()
-        path.lineWidth = 2
+        Self.outline.setStroke()
+        path.lineWidth = 1.5
+        path.lineJoinStyle = .round
         path.stroke()
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-        paragraph.lineBreakMode = .byClipping
-        let font = NSFont(name: "NeoDunggeunmo-Regular", size: 15)
-            ?? .systemFont(ofSize: 14, weight: .semibold)
-        let textColor = NSColor(calibratedRed: 0.29, green: 0.18, blue: 0.11, alpha: 1)
-        (message as NSString).draw(in: CGRect(x: 15, y: 18, width: width - 30, height: 23),
-            withAttributes: [.font: font, .foregroundColor: textColor, .paragraphStyle: paragraph])
-        ("톡 눌러 닫기" as NSString).draw(in: CGRect(x: 15, y: 43, width: width - 30, height: 15),
-            withAttributes: [.font: NSFont.systemFont(ofSize: 10),
-                             .foregroundColor: textColor.withAlphaComponent(0.65),
-                             .paragraphStyle: paragraph])
+        if let dialogueImage {
+            let scale = min(1, (width - 30) / dialogueImage.size.width)
+            let size = CGSize(width: dialogueImage.size.width * scale,
+                              height: dialogueImage.size.height * scale)
+            dialogueImage.draw(in: CGRect(x: (width - size.width) / 2,
+                                           y: (height - size.height) / 2,
+                                           width: size.width, height: size.height),
+                               from: .zero, operation: .sourceOver, fraction: 1,
+                               respectFlipped: true, hints: [.interpolation: NSImageInterpolation.none])
+        }
+
     }
 }
 
@@ -342,6 +485,23 @@ final class SpiritSpeechView: NSView {
 final class FlameTrailPanel: NSPanel {
     private let trailView = CompanionView(frame: CGRect(x: 0, y: 0, width: 384, height: 384))
     private let trailScene = FlameTrailScene(size: CGSize(width: 384, height: 384))
+    private var distanceToNextEmber: CGFloat = 4
+    private var expiryTimer: Timer?
+
+    @objc private func expireTrail() { clear() }
+
+    private func renewExpiry() {
+        // SpriteKit may stop delivering frames to this nonactivating overlay.
+        // Its longest particle lasts 0.85s; wall-clock cleanup must not depend on rendering.
+        if let expiryTimer {
+            expiryTimer.fireDate = Date().addingTimeInterval(1)
+        } else {
+            let timer = Timer(timeInterval: 1, target: self, selector: #selector(expireTrail),
+                              userInfo: nil, repeats: false)
+            expiryTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        }
+    }
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
@@ -378,28 +538,74 @@ final class FlameTrailPanel: NSPanel {
             ember.position.y += shift.y
         }
         setFrameOrigin(origin)
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        let distance = hypot(dx, dy)
         let speed = hypot(velocity.x, velocity.y)
-        guard speed > 20 else { return }
-        let count = min(8, max(2, Int(hypot(end.x - start.x, end.y - start.y) / 10)))
-        for index in 0..<count {
-            let progress = CGFloat(index + 1) / CGFloat(count)
-            let position = CGPoint(x: start.x + (end.x - start.x) * progress - origin.x,
-                                   y: start.y + (end.y - start.y) * progress - origin.y)
-            let ember = SKSpriteNode(texture: texture)
-            let side = CGFloat.random(in: 7...13)
-            ember.size = CGSize(width: side, height: side * 1.6)
-            ember.position = CGPoint(x: position.x + CGFloat.random(in: -10...10),
-                                     y: position.y + CGFloat.random(in: -8...8))
-            ember.color = index.isMultiple(of: 2) ? .systemOrange : .systemYellow
+        guard distance > 0.001, speed > 20 else { return }
+        let unit = CGPoint(x: dx / distance, y: dy / distance)
+        let normal = CGPoint(x: -unit.y, y: unit.x)
+        let characterScale = companion.frame.width / 128
+        let speedFactor = min(1, speed / 1200)
+        var traveled: CGFloat = 0
+        var emitted = 0
+        // Carry the remaining spacing across input events so a high mouse polling
+        // rate does not turn a slow drag into a dense stream of identical flames.
+        while traveled + distanceToNextEmber <= distance, emitted < 96 {
+            traveled += distanceToNextEmber
+            distanceToNextEmber = CGFloat.random(in: 5...13) * characterScale * (1 - 0.22 * speedFactor)
+            let spread = CGFloat.random(in: -1...1)
+            let edgeDepth = sqrt(max(0, 1 - spread * spread))
+            let radius = 16 * characterScale
+            let position = CGPoint(
+                x: start.x + unit.x * traveled - unit.x * radius * edgeDepth
+                    + normal.x * radius * spread - origin.x,
+                y: start.y + unit.y * traveled - unit.y * radius * edgeDepth
+                    + normal.y * radius * spread - origin.y)
+            let ember = SKSpriteNode(texture: emitted == 0 ? texture : companion.spiritScene.effectTexture)
+            // Mostly small embers, with an occasional broader tongue of flame.
+            let larger = Int.random(in: 0..<5) == 0
+            let side = CGFloat.random(in: larger ? 5...8 : 1.8...4.2) * characterScale
+            ember.size = CGSize(width: side, height: side * CGFloat.random(in: 1.15...2.1))
+            ember.position = position
+            ember.color = NSColor(calibratedRed: 1, green: CGFloat.random(in: 0.48...0.85),
+                                  blue: CGFloat.random(in: 0.04...0.18), alpha: 1)
             ember.shader = companion.spiritScene.effectShader
             ember.colorBlendFactor = ember.shader == nil ? 0.35 : 0
-            ember.zRotation = atan2(velocity.y, velocity.x) + .pi / 2
+            let angle = atan2(unit.y, unit.x) + .pi / 2 + CGFloat.random(in: -0.45...0.45)
+            let launchAngle = atan2(sin(angle), cos(angle))
+            ember.zRotation = launchAngle
+            let initialAlpha = CGFloat.random(in: 0.48...0.92)
+            ember.alpha = initialAlpha
             trailScene.addChild(ember)
-            let drift = SKAction.moveBy(x: -velocity.x * 0.035, y: -velocity.y * 0.035 + 18, duration: 0.48)
-            drift.timingMode = .easeOut
-            ember.run(.sequence([.group([drift, .fadeOut(withDuration: 0.48),
-                                         .scale(to: 0.35, duration: 0.48)]), .removeFromParent()]))
+            let lifetime = Double.random(in: larger ? 0.52...0.85 : 0.3...0.66)
+            let inertia = CGFloat.random(in: 0.012...0.035)
+            let lateral = CGFloat.random(in: -13...13) * characterScale
+            let lift = CGFloat.random(in: 15...36) * characterScale
+            let curl = CGFloat.random(in: -8...8) * characterScale
+            let flickerPhase = CGFloat.random(in: 0...(2 * .pi))
+            var lastOffset = CGPoint.zero
+            // Apply relative deltas, preserving screen-space rebasing when the
+            // transparent trail window moves during an unfinished animation.
+            let motion = SKAction.customAction(withDuration: lifetime) { node, elapsed in
+                let t = min(1, CGFloat(elapsed) / CGFloat(lifetime))
+                let drag = 1 - pow(1 - t, 2)
+                let sway = lateral * t + curl * sin(t * .pi)
+                let offset = CGPoint(x: -velocity.x * inertia * drag + normal.x * sway,
+                                     y: -velocity.y * inertia * drag + normal.y * sway + lift * t * t)
+                node.position.x += offset.x - lastOffset.x
+                node.position.y += offset.y - lastOffset.y
+                lastOffset = offset
+                node.zRotation = launchAngle * (1 - t * 0.75) + sin(t * .pi * 2 + flickerPhase) * 0.14
+                node.alpha = initialAlpha * pow(1 - t, 1.25) * (0.92 + 0.08 * sin(t * 12 + flickerPhase))
+                node.setScale(max(0.12, 1 - t * 0.88))
+            }
+            ember.run(.sequence([motion, .removeFromParent()]))
+            emitted += 1
         }
+        distanceToNextEmber -= min(distance - traveled, distanceToNextEmber)
+        if emitted > 0 { renewExpiry() }
+        guard !trailScene.children.isEmpty else { return }
         // Keep the bounded trail inexpensive, even during a very rapid drag.
         while trailScene.children.count > 96 { trailScene.children.first?.removeFromParent() }
         trailView.isPaused = false
@@ -407,6 +613,9 @@ final class FlameTrailPanel: NSPanel {
     }
 
     func clear() {
+        expiryTimer?.invalidate()
+        expiryTimer = nil
+        distanceToNextEmber = 4
         trailScene.removeAllChildren()
         trailView.isPaused = true
         orderOut(nil)
@@ -424,5 +633,102 @@ private final class FlameTrailScene: SKScene {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func didEvaluateActions() {
         if children.isEmpty { finished?() }
+    }
+}
+
+
+/// The returning hammer can cross the desktop without enlarging the input surface.
+@MainActor
+final class HammerFlightPanel: NSPanel {
+    private let flightView = CompanionView(frame: .zero)
+    private let flightScene = SKScene(size: CGSize(width: 128, height: 128))
+    private let sprite = SKSpriteNode()
+    private let trailSprites = (0..<3).map { _ in SKSpriteNode() }
+
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+
+    init() {
+        super.init(contentRect: CGRect(x: 0, y: 0, width: 128, height: 128),
+                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        title = "빌드정령 날아오는 망치"
+        backgroundColor = .clear
+        isOpaque = false
+        ignoresMouseEvents = true
+        hasShadow = false
+        hidesOnDeactivate = false
+        isFloatingPanel = true
+        isReleasedWhenClosed = false
+        level = .floating
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        setAccessibilityElement(false)
+        flightView.allowsTransparency = true
+        flightView.preferredFramesPerSecond = 60
+        flightView.setAccessibilityElement(false)
+        flightScene.backgroundColor = .clear
+        flightScene.scaleMode = .resizeFill
+        sprite.name = "flyingHammer"
+        sprite.zPosition = 1
+        flightScene.addChild(sprite)
+        flightView.presentScene(flightScene)
+        contentView = flightView
+        flightView.isPaused = true
+    }
+
+    func show(_ flight: HammerFlightFrame, at screenPoint: CGPoint, above companion: CompanionPanel) {
+        sprite.texture = flight.texture
+        sprite.size = flight.size
+        sprite.anchorPoint = flight.anchorPoint
+        sprite.zRotation = flight.rotation
+        sprite.alpha = flight.opacity
+        sprite.position = screenPoint
+        var bounds = sprite.calculateAccumulatedFrame()
+        for (index, ghost) in trailSprites.enumerated() {
+            guard index < flight.trail.count else {
+                ghost.removeFromParent()
+                ghost.texture = nil
+                continue
+            }
+            let sample = flight.trail[index]
+            let viewPoint = companion.spiritScene.convertPoint(toView: sample.position)
+            let windowPoint = companion.spiritView.convert(viewPoint, to: nil)
+            ghost.position = companion.convertPoint(toScreen: windowPoint)
+            ghost.texture = flight.texture
+            ghost.size = sample.size
+            ghost.anchorPoint = flight.anchorPoint
+            ghost.zRotation = sample.rotation
+            ghost.alpha = min(0.20, max(0, sample.opacity))
+            ghost.name = "hammerTrail\(index)"
+            ghost.zPosition = -CGFloat(index + 1)
+            if ghost.parent == nil { flightScene.addChild(ghost) }
+            bounds = bounds.union(ghost.calculateAccumulatedFrame())
+        }
+        // Include each rotated silhouette; a long trail can extend beyond the grip window.
+        bounds = bounds.insetBy(dx: -4, dy: -4)
+        let origin = CGPoint(x: floor(bounds.minX), y: floor(bounds.minY))
+        let size = CGSize(width: max(64, ceil(bounds.maxX) - origin.x),
+                          height: max(64, ceil(bounds.maxY) - origin.y))
+        if frame.size != size {
+            setFrame(CGRect(origin: origin, size: size), display: false)
+            flightScene.size = size
+        } else {
+            setFrameOrigin(origin)
+        }
+        for node in [sprite] + trailSprites where node.parent != nil {
+            node.position = CGPoint(x: node.position.x - origin.x, y: node.position.y - origin.y)
+        }
+        flightView.isPaused = false
+        order(.above, relativeTo: companion.windowNumber)
+    }
+
+    func clear() {
+        sprite.texture = nil
+        for ghost in trailSprites {
+            ghost.removeFromParent()
+            ghost.texture = nil
+            ghost.alpha = 0
+        }
+        flightView.isPaused = true
+        orderOut(nil)
     }
 }

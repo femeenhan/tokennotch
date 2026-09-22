@@ -36,7 +36,7 @@ struct RigSceneSmoke {
         scene.isObserved = true
         for side in [80.0, 128.0, 192.0, 384.0] {
             scene.size = CGSize(width: side, height: side)
-            let label = scene.childNode(withName: "providerLabel") as! SKSpriteNode
+            let label = scene.childNode(withName: "//providerLabel") as! SKSpriteNode
             let stage = scene.childNode(withName: "stage")!
             require(abs(label.frame.midX - stage.position.x) < 0.01, "Nameplate must align with character at every size")
             require(label.texture?.filteringMode == .nearest, "Pixel label must retain sharp edges")
@@ -87,12 +87,17 @@ struct RigSceneSmoke {
         scene.remainingQuota = 0.05
         for _ in 0..<240 { time += 1.0 / 60; scene.update(time) }
         require(core.yScale < normalScale - 0.2, "Low quota must visibly reduce the core")
+        let hammerHand = scene.childNode(withName: "//hammerHand") as! SKSpriteNode
+        let freeHand = scene.childNode(withName: "//freeArm")!.children.first as! SKSpriteNode
+        require(hammerHand.colorBlendFactor > 0.1
+                && hammerHand.colorBlendFactor == freeHand.colorBlendFactor,
+                "Both arms must receive the same fatigue tint")
         for (name, state, quota) in [("tired", SpiritState.idle, 0.05),
                                      ("attention", .attention, 0.05), ("sleep", .sleeping, 0.05),
                                      ("recovery", .idle, 1.0), ("celebrate", .completed, 1.0)] {
             scene.remainingQuota = quota
             scene.render(state: state, reduceMotion: false)
-            for _ in 0..<30 { time += 1.0 / 60; scene.update(time) }
+            for _ in 0..<(state == .attention ? 60 : 30) { time += 1.0 / 60; scene.update(time) }
             require(body.alpha == 1, "Quota and rest states must preserve body opacity")
             require(eyes!.yScale == 1, "Dedicated eye expressions must preserve the eye node height")
             if state == .attention {
@@ -211,28 +216,48 @@ struct RigSceneSmoke {
                 }
             }
             require(sample.interactionCharge > 0.95, "Long hold must reach full charge")
+            let chargedHand = sample.childNode(withName: "//hammerHand") as! SKSpriteNode
+            let chargedFreeHand = sample.childNode(withName: "//freeArm")!.children.first as! SKSpriteNode
+            let heldTool = sample.childNode(withName: "//heldHammer") as! SKSpriteNode
+            require(chargedHand.shader != nil && chargedHand.shader === chargedFreeHand.shader,
+                    "Charging must recolor both arms with the same flame palette")
+            require(heldTool.shader == nil && heldTool.colorBlendFactor == 0,
+                    "The metal hammer must retain its own material")
             require((sample.childNode(withName: "//chargeAura")?.alpha ?? 0) > 0.2,
                     "Power must have a visible aura")
             sample.render(state: .idle, reduceMotion: true)
             sample.update(4)
             require(sample.childNode(withName: "//chargeAura")?.alpha == 0,
                     "Reduce Motion must suppress power aura")
+            require(chargedHand.shader == nil, "Disabling charge must clear the hand palette too")
         }
         let diverse = SpiritScene(size: CGSize(width: 192, height: 192))
         diverse.tracksPointer = false
         var seenFlames = Set<ObjectIdentifier>()
         var emittedFlames: [SKNode] = []
         var emitterBands = Set<Int>()
+        var emberWidths: [CGFloat] = []
+        var emberTextures = Set<ObjectIdentifier>()
         for frame in 0..<1800 {
             diverse.update(Double(frame) / 60)
+            require(diverse.childNode(withName: "//sparks")!.children.count <= 80,
+                    "Decorative embers must remain bounded")
             for node in diverse.childNode(withName: "//sparks")!.children {
                 if seenFlames.insert(ObjectIdentifier(node)).inserted {
                     emittedFlames.append(node) // Retain identities so deallocated sprite addresses cannot be reused.
                     emitterBands.insert(Int(node.position.y / 8))
+                    if let ember = node as? SKSpriteNode, let texture = ember.texture {
+                        emberWidths.append(ember.size.width)
+                        emberTextures.insert(ObjectIdentifier(texture))
+                    }
                 }
             }
         }
         require(emitterBands.count >= 4, "Embers must originate at feet, shoulders, temples and crown")
+        require((emberWidths.max() ?? 0) > 2 * (emberWidths.min() ?? 1),
+                "Idle emissions must mix tiny flecks with visibly larger licks")
+        require(emberTextures.count >= 2, "Embers must not repeat one identical flame silhouette")
+        print("PASS: \(emittedFlames.count) idle embers, \(emitterBands.count) height bands, \(emberTextures.count) silhouettes")
         require(comparisonCaptures == 24, "All 24 actual-size background comparisons must be written")
         // Measure the rendered flame itself, excluding breathing, blinking and particles.
         // A moving rig must not pass this test with an unchanged fire texture.
@@ -283,6 +308,21 @@ struct RigSceneSmoke {
         let frozenCells = cells()
         for frame in 1...60 { fire.update(2 + Double(frame) / 60) }
         require(cells() == frozenCells, "Reduce Motion must freeze the rendered flame pixels")
+        // A working preview makes the different ember sizes, sources and cooling paths reviewable.
+        fire.backgroundColor = NSColor(calibratedWhite: 0.10, alpha: 1)
+        fire.render(state: .working, reduceMotion: false)
+        let emberGIF = CGImageDestinationCreateWithURL(output.appendingPathComponent("ember-motion.gif") as CFURL,
+                                                       "com.compuserve.gif" as CFString, 90, nil)!
+        CGImageDestinationSetProperties(emberGIF, [kCGImagePropertyGIFDictionary:
+            [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+        for frame in 0..<360 {
+            fire.update(3 + Double(frame + 1) / 60)
+            if frame.isMultiple(of: 4) {
+                CGImageDestinationAddImage(emberGIF, view.texture(from: fire, crop: view.bounds)!.cgImage(),
+                    [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 4.0 / 60]] as CFDictionary)
+            }
+        }
+        require(CGImageDestinationFinalize(emberGIF), "Ember motion preview must be written")
         print("PASS: fine flame silhouette changes \(silhouetteChanges) cells; hot layers change \(colorChanges) cells; reduced motion freezes pixels")
         print("PASS: independent rig, hammer arc, idle recovery, reduced motion; snapshots: \(output.path)")
     }
