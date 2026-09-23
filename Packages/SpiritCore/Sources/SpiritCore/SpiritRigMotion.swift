@@ -110,6 +110,8 @@ public struct SpiritRigMotion: Sendable {
     private var pressElapsed: Double?
     private var tapEnergy = 0.0
     private var charge = 0.0
+    private var chargeReleaseElapsed: Double?
+    private var chargeReleaseStart = 0.0
     private var interactionTime = 0.0
     private var lastTapTime = -10.0
     private var tapCount = 0
@@ -121,6 +123,7 @@ public struct SpiritRigMotion: Sendable {
 
     public mutating func beginPress() {
         pressElapsed = 0
+        chargeReleaseElapsed = nil
         registerActivity()
         completionTime = nil
         emberTime = nil
@@ -131,6 +134,12 @@ public struct SpiritRigMotion: Sendable {
     public mutating func endPress(registerTap: Bool) -> Bool {
         let held = (pressElapsed ?? 0) >= 0.45
         pressElapsed = nil
+        if held {
+            chargeReleaseElapsed = 0
+            chargeReleaseStart = charge
+            // Earlier taps are already part of this held charge and its afterglow.
+            tapEnergy = 0
+        }
         if registerTap && !held {
             tapCount = interactionTime - lastTapTime < 0.75 ? tapCount + 1 : 1
             lastTapTime = interactionTime
@@ -203,6 +212,8 @@ public struct SpiritRigMotion: Sendable {
         gazeReaction = false
         tapEnergy = 0
         charge = 0
+        chargeReleaseElapsed = nil
+        chargeReleaseStart = 0
         workPettingPending = false
         let hammerRest = pose.hammerRest
         let hammer = pose.hammerAngle
@@ -341,9 +352,17 @@ public struct SpiritRigMotion: Sendable {
         liftAmount += ((dragging ? 1.0 : 0.0) - liftAmount) * (1 - exp(-dt * (dragging ? 9 : 14)))
         if let held = pressElapsed { pressElapsed = held + dt }
         tapEnergy = max(0, tapEnergy - dt * 0.12)
-        let heldCharge = pressElapsed.map { min(1, max(0, ($0 - 0.45) / 1.35)) } ?? 0
+        // The response smoothing brings this 2.4-second ramp to full power at about 3 seconds.
+        let heldCharge = pressElapsed.map { min(1, max(0, ($0 - 0.45) / 2.4)) } ?? 0
         let targetCharge = max(tapEnergy, heldCharge)
-        charge += (targetCharge - charge) * (1 - exp(-dt * (targetCharge > charge ? 7 : 0.65)))
+        if let released = chargeReleaseElapsed {
+            let releaseAge = released + dt
+            chargeReleaseElapsed = releaseAge
+            charge = max(tapEnergy, chargeReleaseStart * (1 - smooth(releaseAge / 2)))
+            if releaseAge >= 2 { chargeReleaseElapsed = nil }
+        } else {
+            charge += (targetCharge - charge) * (1 - exp(-dt * (targetCharge > charge ? 7 : 0.65)))
+        }
         dragVelocityAge += dt
         if dragVelocityAge > 0.08 {
             dragX *= exp(-dt * 10)
@@ -552,7 +571,7 @@ public struct SpiritRigMotion: Sendable {
         if state == .attention { next.heldEmber = smooth(stateElapsed / 1) }
         next.emberGlow = min(max(next.emberGlow + next.impact * 0.3 + petting * 0.15, 0), 1)
         next.flameSway += dragLean
-        next.flameStretch += 0.28 * charge + min(abs(dragY) / 1400, 0.12)
+        next.flameStretch += 0.5 * charge + min(abs(dragY) / 1400, 0.12)
         next.headAngle += dragLean * 0.15
         if charge > 0.1 {
             next.eyeOpen = max(next.eyeOpen, 0.8)

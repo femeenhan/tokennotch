@@ -35,7 +35,7 @@ struct ChargeHammerSmoke {
                 var sawDescendingBolt = false
                 let gif = tapping ? nil : CGImageDestinationCreateWithURL(
                     output.appendingPathComponent("charge-\(Int(side)).gif") as CFURL,
-                    "com.compuserve.gif" as CFString, 100, nil)
+                    "com.compuserve.gif" as CFString, 160, nil)
                 if let gif {
                     CGImageDestinationSetProperties(gif, [kCGImagePropertyGIFDictionary:
                         [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
@@ -45,8 +45,16 @@ struct ChargeHammerSmoke {
                     if tapping && frame <= 150 && frame % 12 == 0 {
                         scene.beginPress(); _ = scene.endPress(registerTap: true)
                     }
-                    if !tapping && frame == 150 { _ = scene.endPress(registerTap: false) }
+                    if !tapping && frame == 330 { _ = scene.endPress(registerTap: false) }
                     scene.update(Double(frame) / 60)
+                    if !tapping && frame == 300 {
+                        precondition(scene.interactionCharge > 0.95, "A held charge must sustain its peak")
+                        precondition(bolt.calculateAccumulatedFrame().width > 30,
+                                     "Peak hammer electricity must spread beyond the old small ring")
+                    }
+                    if !tapping && frame == 450 {
+                        precondition(scene.interactionCharge < 0.08, "Afterglow must finish about two seconds after release")
+                    }
                     if !bolt.isHidden {
                         sawLightning = true
                         precondition(!sky.isHidden && !motes.isHidden, "Sky energy must accompany hammer arcs")
@@ -62,12 +70,12 @@ struct ChargeHammerSmoke {
                         let grip = tool.convert(.zero, to: stage)
                         precondition(hypot(palm.x - grip.x, palm.y - grip.y) < 0.01, "Charge hand must stay on the handle")
                     }
-                    if let gif, frame <= 300, frame % 3 == 0 {
+                    if let gif, frame <= 480, frame % 3 == 0 {
                         let image = view.texture(from: scene, crop: view.bounds)!.cgImage()
                         CGImageDestinationAddImage(gif, image, [kCGImagePropertyGIFDictionary:
                             [kCGImagePropertyGIFDelayTime: 0.05]] as CFDictionary)
                     }
-                    if !tapping && [20, 60, 116, 140, 900].contains(frame) {
+                    if !tapping && [20, 70, 110, 150, 200, 300, 360, 450, 900].contains(frame) {
                         let image = view.texture(from: scene, crop: view.bounds)!.cgImage()
                         try NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])!
                             .write(to: output.appendingPathComponent("charge-\(Int(side))-\(frame).png"))

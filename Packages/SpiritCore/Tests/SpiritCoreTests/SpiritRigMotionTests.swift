@@ -473,6 +473,48 @@ struct SpiritRigMotionTests {
         }
     }
 
+    @Test func longPressBuildsForThreeSecondsHoldsAndReleasesOverTwoSeconds() {
+        var motion = SpiritRigMotion()
+        motion.beginPress()
+        for _ in 0..<120 { _ = motion.advance(by: 1.0 / 60) }
+        #expect(motion.pose.charge > 0.5 && motion.pose.charge < 0.7)
+        for _ in 0..<60 { _ = motion.advance(by: 1.0 / 60) }
+        #expect(motion.pose.charge > 0.95)
+        for _ in 0..<600 { _ = motion.advance(by: 1.0 / 60) }
+        #expect(motion.pose.charge > 0.99)
+        #expect(motion.pose.flameStretch > 1.45)
+        let released = motion.endPress(registerTap: true)
+        #expect(released)
+        for _ in 0..<60 { _ = motion.advance(by: 1.0 / 60) }
+        #expect(motion.pose.charge > 0.45 && motion.pose.charge < 0.55)
+        for _ in 0..<61 { _ = motion.advance(by: 1.0 / 60) }
+        #expect(motion.pose.charge == 0)
+    }
+
+    @Test func longPressConsumesEarlierTapEnergyButAcceptsNewTapsAfterRelease() {
+        var motion = SpiritRigMotion()
+        for _ in 0..<6 {
+            motion.beginPress()
+            _ = motion.advance(by: 1.0 / 60)
+            _ = motion.endPress(registerTap: true)
+        }
+        motion.beginPress()
+        for _ in 0..<180 { _ = motion.advance(by: 1.0 / 60) }
+        _ = motion.endPress(registerTap: true)
+        var withNewTaps = motion
+        for _ in 0..<121 { _ = motion.advance(by: 1.0 / 60) }
+        #expect(motion.pose.charge == 0)
+
+        for _ in 0..<90 { _ = withNewTaps.advance(by: 1.0 / 60) }
+        for _ in 0..<3 {
+            withNewTaps.beginPress()
+            _ = withNewTaps.advance(by: 1.0 / 60)
+            _ = withNewTaps.endPress(registerTap: true)
+        }
+        for _ in 0..<30 { _ = withNewTaps.advance(by: 1.0 / 60) }
+        #expect(withNewTaps.pose.charge > 0.25)
+    }
+
     @Test func holdingChargesAndDragLeansWithoutInterruptingForge() {
         var motion = SpiritRigMotion()
         motion.setState(.working)

@@ -275,28 +275,34 @@ final class SpiritScene: SKScene {
     }
     private var previousTime: TimeInterval?
     private var reducedMotion = false
+    private static let chargeGlowColors = [
+        NSColor(red: 1, green: 0.42, blue: 0.08, alpha: 1),
+        NSColor(red: 1, green: 0.73, blue: 0.12, alpha: 1),
+        NSColor(red: 1, green: 0.96, blue: 0.55, alpha: 1),
+        NSColor(red: 0.40, green: 0.94, blue: 0.86, alpha: 1),
+        NSColor(red: 0.35, green: 0.84, blue: 1, alpha: 1)
+    ]
     private let chargeUniform = SKUniform(name: "u_charge", float: 0)
-    private lazy var chargeShader = SKShader(source: """
+    // The body and flame share the same five heat stages, preserving dark pixel edges.
+    private static let chargePalette = """
+        vec3 chargeColor(vec3 base, float shade, float charge) {
+            vec3 gold = mix(vec3(0.86, 0.28, 0.025), vec3(1.0, 0.83, 0.25), shade);
+            vec3 yellow = mix(vec3(0.94, 0.49, 0.04), vec3(1.0, 0.98, 0.69), shade);
+            vec3 whiteHot = mix(vec3(0.10, 0.72, 0.73), vec3(1.0, 1.0, 0.92), shade);
+            vec3 blueHot = mix(vec3(0.10, 0.38, 0.94), vec3(0.88, 1.0, 1.0), shade);
+            vec3 color = mix(base, gold, smoothstep(0.0, 0.23, charge));
+            color = mix(color, yellow, smoothstep(0.23, 0.48, charge));
+            color = mix(color, whiteHot, smoothstep(0.48, 0.75, charge));
+            return mix(color, blueHot, smoothstep(0.75, 1.0, charge));
+        }
+        """
+    private lazy var chargeShader = SKShader(source: Self.chargePalette + """
         void main() {
             vec4 source = SKDefaultShading();
             vec3 rgb = source.rgb / max(source.a, 0.001);
-            vec3 gold;
-            vec3 blue;
-            if (rgb.g < 0.32) {
-                gold = vec3(0.96, 0.45, 0.03);
-                blue = vec3(0.12, 0.38, 0.83);
-            } else if (rgb.g < 0.65) {
-                gold = vec3(1.0, 0.72, 0.05);
-                blue = vec3(0.17, 0.67, 0.95);
-            } else if (rgb.b < 0.60) {
-                gold = vec3(1.0, 0.90, 0.45);
-                blue = vec3(0.54, 0.90, 1.0);
-            } else {
-                gold = vec3(1.0, 0.98, 0.85);
-                blue = vec3(0.92, 1.0, 1.0);
-            }
-            vec3 palette = mix(gold, blue, smoothstep(0.72, 0.95, u_charge));
-            gl_FragColor = vec4(mix(rgb, palette, min(1.0, u_charge * 2.0)) * source.a, source.a);
+            float shade = rgb.g < 0.32 ? 0.0 : rgb.g < 0.65 ? 0.42 : rgb.b < 0.60 ? 0.82 : 1.0;
+            vec3 color = chargeColor(rgb, shade, u_charge);
+            gl_FragColor = vec4(color * source.a, source.a);
         }
         """, uniforms: [chargeUniform])
     private let flameClock = SKUniform(name: "u_flameTime", float: 0)
@@ -304,22 +310,23 @@ final class SpiritScene: SKScene {
     private let flameBend = SKUniform(name: "u_flameBend", float: 0)
     private let flameLength = SKUniform(name: "u_flameLength", float: 1)
     private let flameCooling = SKUniform(name: "u_flameCooling", float: 0)
-    private lazy var pixelFlameShader = SKShader(source: """
+    private lazy var pixelFlameShader = SKShader(source: Self.chargePalette + """
         void main() {
             // One cell is about 1pt in the 64pt rig, half the old atlas step.
             // Quantize the OUTPUT: bending a coarse source alone cannot add detail.
-            vec2 grid = vec2(42.0, 39.0);
+            vec2 grid = vec2(42.0, 55.0);
             vec2 p = (floor(v_tex_coord * grid) + 0.5) / grid;
             // Keep the face rooted; let the crown carry most of the deformation.
-            float rise = smoothstep(0.30, 0.92, p.y);
+            float rise = smoothstep(0.20, 0.65, p.y);
             float t = u_flameTime;
             float wave = sin(t * 3.8 - p.y * 10.0 + p.x * 3.0);
             float curl = sin(t * 6.1 - p.y * 14.0 - p.x * 7.0);
             vec2 q = p;
             q.x -= rise * (u_flameBend * 0.65
                 + u_flameEnergy * (0.043 * wave + 0.018 * curl));
-            q.y -= rise * ((u_flameLength - 1.0) * 0.45
-                + u_flameEnergy * 0.025 * sin(t * 4.5 - p.y * 8.0 + p.x * 13.0));
+            // Stretch only the crown; the face stays anchored below this pivot.
+            q.y = p.y - max(0.0, p.y - 0.20) * (1.0 - 1.0 / max(0.8, u_flameLength));
+            q.y -= rise * u_flameEnergy * 0.018 * sin(t * 4.5 - p.y * 8.0 + p.x * 13.0);
             vec4 edge = texture2D(u_texture, q);
             float inside = step(0.48, edge.a);
             // Let the hotter color boundaries lick upward within the silhouette.
@@ -329,24 +336,19 @@ final class SpiritScene: SKScene {
             vec4 source = texture2D(u_texture, hot);
             vec3 rgb = source.rgb / max(source.a, 0.001);
             vec3 base;
-            vec3 gold;
-            vec3 blue;
+            float shade;
             if (rgb.g < 0.42) {
                 base = vec3(0.914, 0.263, 0.102);
-                gold = vec3(0.96, 0.45, 0.03);
-                blue = vec3(0.12, 0.38, 0.83);
+                shade = 0.0;
             } else if (rgb.g < 0.73) {
                 base = vec3(1.0, 0.588, 0.188);
-                gold = vec3(1.0, 0.72, 0.05);
-                blue = vec3(0.17, 0.67, 0.95);
+                shade = 0.48;
             } else {
                 base = vec3(1.0, 0.882, 0.439);
-                gold = vec3(1.0, 0.90, 0.45);
-                blue = vec3(0.54, 0.90, 1.0);
+                shade = 1.0;
             }
             base = mix(base, vec3(0.78, 0.35, 0.12), u_flameCooling * 0.24);
-            vec3 charged = mix(gold, blue, smoothstep(0.72, 0.95, u_charge));
-            vec3 color = mix(base, charged, min(1.0, u_charge * 2.0));
+            vec3 color = chargeColor(base, shade, u_charge);
             gl_FragColor = vec4(color * inside, inside) * v_color_mix.a;
         }
         """, uniforms: [flameClock, flameEnergy, flameBend, flameLength, flameCooling, chargeUniform])
@@ -446,7 +448,7 @@ final class SpiritScene: SKScene {
         if let atlasImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
            let crop = atlasImage.cropping(to: CGRect(x: 104, y: 53, width: 495, height: 480)) {
             let field = CIImage(cgImage: crop).applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 11.0])
-            let bounds = CGRect(x: -42, y: 0, width: 579, height: 538)
+            let bounds = CGRect(x: -42, y: 0, width: 579, height: 760)
             if let smoothed = CIContext().createCGImage(field, from: bounds) {
                 head.texture = SKTexture(cgImage: smoothed)
                 head.texture?.filteringMode = .linear
@@ -554,7 +556,7 @@ final class SpiritScene: SKScene {
             chargeLightning.name = "chargeLightning"
             chargeLightning.zPosition = 3
             heldHammer.addChild(chargeLightning)
-            for _ in 0..<3 {
+            for _ in 0..<9 {
                 let bolt = SKShapeNode()
                 bolt.strokeColor = NSColor(calibratedRed: 0.62, green: 0.92, blue: 1, alpha: 1)
                 bolt.lineWidth = 0.8
@@ -708,21 +710,21 @@ final class SpiritScene: SKScene {
         skyLightning.name = "skyLightning"
         skyLightning.zPosition = 7
         stage.addChild(skyLightning)
-        for index in 0..<5 {
+        for index in 0..<7 {
             let bolt = SKShapeNode()
             bolt.name = "skyBolt\(index)"
             bolt.strokeColor = index == 0
                 ? NSColor(red: 0.25, green: 0.68, blue: 1, alpha: 1)
                 : NSColor(red: 0.80, green: 0.97, blue: 1, alpha: 1)
-            bolt.lineWidth = index == 0 ? 2.5 : (index == 1 ? 0.9 : 0.55)
-            bolt.glowWidth = index == 0 ? 1.0 : 0
+            bolt.lineWidth = index == 0 ? 4.0 : (index == 1 ? 1.3 : 0.8)
+            bolt.glowWidth = index == 0 ? 1.8 : 0
             bolt.isAntialiased = false
             skyLightning.addChild(bolt)
         }
         chargeMotes.name = "chargeMotes"
         chargeMotes.zPosition = 6
         stage.addChild(chargeMotes)
-        for _ in 0..<8 {
+        for _ in 0..<16 {
             let mote = SKSpriteNode(color: NSColor(red: 0.64, green: 0.91, blue: 1, alpha: 1),
                                     size: CGSize(width: 0.8, height: 1.5))
             chargeMotes.addChild(mote)
@@ -886,7 +888,7 @@ final class SpiritScene: SKScene {
     }
 
     private func apply(_ pose: SpiritRigPose) {
-        stage.setScale(baseStageScale * (1 - pose.charge * 0.10))
+        stage.setScale(baseStageScale)
         body.position.x = 0
         frontTorso?.alpha = 1
         poseTorso.alpha = 0
@@ -956,14 +958,15 @@ final class SpiritScene: SKScene {
         eyes.position.x = pose.gazeX
         eyes.position.y = 9.1 + pose.gazeY
         chargeUniform.floatValue = Float(pose.charge)
-        let powerColor = pose.charge > 0.82
-            ? NSColor(red: 0.35, green: 0.84, blue: 1, alpha: 1)
-            : NSColor(red: 1, green: 0.84, blue: 0.20, alpha: 1)
+        let glowPosition = min(3.999, max(0, pose.charge) * 4)
+        let glowIndex = Int(glowPosition)
+        let powerColor = Self.chargeGlowColors[glowIndex].blended(
+            withFraction: glowPosition - Double(glowIndex), of: Self.chargeGlowColors[glowIndex + 1])!
         aura.color = powerColor
         aura.position = head.position
         aura.zRotation = head.zRotation
-        aura.setScale(1 + pose.charge * 0.13)
-        aura.alpha = pose.charge * (0.25 + 0.025 * sin(flameTime * 5))
+        aura.setScale(1 + pose.charge * 0.20)
+        aura.alpha = pose.charge * (0.30 + 0.07 * sin(flameTime * 5))
         let cooling = min(1, (1 - pose.vitality) * 0.8 + pose.restAmount * 0.2)
         for part in flameParts {
             part.color = NSColor(red: 0.78, green: 0.35, blue: 0.12, alpha: 1)
@@ -984,7 +987,7 @@ final class SpiritScene: SKScene {
         flameEnergy.floatValue = reducedMotion ? 0
             : Float((0.55 + 0.45 * pose.vitality) * (1 - 0.65 * pose.restAmount))
         flameBend.floatValue = Float(pose.flameSway)
-        flameLength.floatValue = Float(pose.flameStretch)
+        flameLength.floatValue = Float(pose.flameStretch + 0.035 * pow(pose.charge, 4) * sin(flameTime * 5))
         flameCooling.floatValue = Float(cooling)
         applyGroundedHammer(pose)
         applyChargingHammer(pose)
@@ -1001,13 +1004,13 @@ final class SpiritScene: SKScene {
         guard amount > 0, pose.hammerRest < 0.001, hammerTrick == nil, !reducedMotion else { return }
         let lift = CGFloat(amount * amount * (3 - 2 * amount))
         // A slow strike envelope gives the gathering energy a readable impact beat.
-        let cycle = flameTime / 0.86
+        let cycle = flameTime / 0.82
         let beat = cycle - floor(cycle)
         let impact = pow(max(0, 1 - abs(beat - 0.24) / 0.15), 2) * amount
         body.position.y -= impact * 0.65
         head.zRotation -= impact * 0.045
-        body.position.x -= 1.5 * lift
-        body.zRotation -= 0.10 * lift
+        body.position.x -= 2.2 * lift
+        body.zRotation -= 0.14 * lift
         body.yScale *= 1 - 0.025 * lift
         head.zRotation += 0.045 * lift
         eyes.position.y += 0.6 * lift
@@ -1058,18 +1061,39 @@ final class SpiritScene: SKScene {
         guard amount > 0.2 else { return }
         chargeLightning.isHidden = false
         let phase = Int(flameTime * 12)
+        // Keep the enlarged arcs inside the transparent character window at every size.
+        func confinedToWindow(_ point: CGPoint) -> CGPoint {
+            let screen = heldHammer.convert(point, to: self)
+            let inset = 2.5 * characterScale
+            return heldHammer.convert(CGPoint(x: min(size.width - inset, max(inset, screen.x)),
+                                               y: min(size.height - inset, max(inset, screen.y))), from: self)
+        }
         for (index, child) in chargeLightning.children.enumerated() {
             guard let bolt = child as? SKShapeNode else { continue }
             let path = CGMutablePath()
-            let angle = Double(index) * .pi * 2 / 3 + Double(phase % 7) * 0.18
-            let points = (0...5).map { step in
-                let a = angle + Double(step) * 0.27
-                let radius = (step % 2 == 0 ? 8.8 : 10.5) + impact
-                return CGPoint(x: cos(a) * radius, y: 13 + sin(a) * radius * 0.66)
+            let angle = Double(index % 3) * .pi * 2 / 3 + Double(phase % 17) * 0.18
+            let radius = 8 + amount * 9 + impact * 2
+            if index < 3 {
+                // Three broken rings surround the head without obscuring its silhouette.
+                path.addLines(between: (0...8).map { step in
+                    let a = angle + Double(step) * 0.22
+                    let r = radius + (step.isMultiple(of: 2) ? -1.2 : 1.2)
+                    return confinedToWindow(CGPoint(x: cos(a) * r, y: 15 + sin(a) * r * 0.72))
+                })
+            } else {
+                let a = angle + Double(index / 3) * 0.72
+                path.addLines(between: (0...4).map { step in
+                    let r = radius * 0.72 + Double(step) * (1 + amount * 1.5)
+                    let zigzag = step == 0 || step == 4 ? 0 : (step.isMultiple(of: 2) ? -2.0 : 2.0)
+                    return confinedToWindow(CGPoint(x: cos(a) * r - sin(a) * zigzag,
+                                   y: 15 + sin(a) * r * 0.72 + cos(a) * zigzag))
+                })
             }
-            path.addLines(between: points)
             bolt.path = path
-            bolt.alpha = amount * (0.4 + impact * 0.6)
+            bolt.lineWidth = index < 3 ? 0.65 + amount * 0.65 : 0.6 + amount * 0.35
+            bolt.glowWidth = amount * 0.9
+            bolt.alpha = index < 3 ? amount * (0.65 + impact * 0.35)
+                : max(0, (amount - 0.45) / 0.55) * (0.45 + impact * 0.55)
         }
         skyLightning.isHidden = false
         chargeMotes.isHidden = false
@@ -1107,32 +1131,35 @@ final class SpiritScene: SKScene {
             guard let bolt = child as? SKShapeNode else { continue }
             if index < 2 {
                 bolt.path = descendingPath(route, progress: reach)
-                bolt.alpha = amount * (index == 0 ? 0.32 : 0.60) * (0.65 + impact * 1.0)
-            } else if index < 4 {
-                let side = index == 2 ? -1.0 : 1.0
+                bolt.alpha = amount * (index == 0 ? 0.48 : 0.90) * (0.65 + impact * 1.0)
+            } else if index < 6 {
+                let side = index.isMultiple(of: 2) ? -1.0 : 1.0
                 let fork = route[index]
-                let origin = CGPoint(x: min(upperRight.x, max(upperLeft.x, fork.x + side * (5 + amount * 4))),
+                let origin = CGPoint(x: min(upperRight.x, max(upperLeft.x, fork.x + side * (6 + amount * 8))),
                                      y: min(source.y, fork.y + 7))
                 bolt.path = descendingPath([origin, CGPoint(x: origin.x - side * 3, y: origin.y - 4),
                     CGPoint(x: fork.x + side * 2, y: fork.y + 2), fork], progress: reach)
                 bolt.alpha = max(0, amount - 0.35) * (0.25 + impact * 0.75)
             } else {
                 let path = CGMutablePath()
-                for ray in 0..<6 {
-                    let angle = Double(ray) * .pi / 3 + 0.2
+                for ray in 0..<10 {
+                    let angle = Double(ray) * .pi / 5 + 0.2
                     path.move(to: CGPoint(x: target.x + cos(angle) * 2, y: target.y + sin(angle) * 2))
-                    path.addLine(to: CGPoint(x: target.x + cos(angle) * (3 + impact * 4),
-                                            y: target.y + sin(angle) * (3 + impact * 4)))
+                    path.addLine(to: CGPoint(x: target.x + cos(angle) * (5 + impact * 9),
+                                            y: target.y + sin(angle) * (5 + impact * 9)))
                 }
                 bolt.path = path
                 bolt.alpha = impact * 0.85
             }
         }
         for (index, mote) in chargeMotes.children.enumerated() {
-            let t = (flameTime * 0.85 + Double(index) / 8).truncatingRemainder(dividingBy: 1)
+            let t = (flameTime * 0.85 + Double(index) / Double(chargeMotes.children.count)).truncatingRemainder(dividingBy: 1)
             let side = index % 2 == 0 ? -1.0 : 1.0
-            mote.position = CGPoint(x: target.x + side * (1 - t) * (7 + sin(t * .pi) * 5),
-                                    y: target.y + (1 - t) * (12 + Double(index % 3) * 4))
+            mote.position = CGPoint(x: target.x + side * (1 - t) * (12 + amount * 6 + sin(t * .pi) * 7),
+                                    y: target.y + (1 - t) * (18 + Double(index % 4) * 5))
+            let scenePoint = stage.convert(mote.position, to: self)
+            mote.position = stage.convert(CGPoint(x: min(size.width - 4, max(4, scenePoint.x)),
+                                                  y: min(size.height - 4, max(4, scenePoint.y))), from: self)
             mote.alpha = sin(t * .pi) * amount * 0.75
             mote.zRotation = side * (1 - t) * 0.6
         }
