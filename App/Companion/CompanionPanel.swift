@@ -663,6 +663,8 @@ final class HammerFlightPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         setAccessibilityElement(false)
         flightView.allowsTransparency = true
+        // Synchronize the image with the window's per-frame position and size changes.
+        flightView.isAsynchronous = false
         flightView.preferredFramesPerSecond = 60
         flightView.setAccessibilityElement(false)
         flightScene.backgroundColor = .clear

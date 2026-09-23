@@ -15,6 +15,14 @@ struct HammerTrickSmoke {
         func require(_ value: Bool, _ message: String) {
             if !value { fatalError(message) }
         }
+        for asset in ["smith-rig-atlas", "hammer-parts", "hero-hammer", "hammer-keyposes"] {
+            let source = URL(fileURLWithPath: "App/Resources/Spirit/\(asset).png")
+            guard let bundled = Bundle.main.url(forResource: asset, withExtension: "png", subdirectory: "Spirit") else {
+                fatalError("Copy current App/Resources/Spirit beside the smoke executable: missing \(asset)")
+            }
+            require(try Data(contentsOf: source) == Data(contentsOf: bundled),
+                    "Smoke resources must match current artwork: \(asset)")
+        }
         func makeScene() -> SpiritScene {
             let scene = SpiritScene(size: view.frame.size)
             scene.tracksPointer = false
@@ -28,21 +36,30 @@ struct HammerTrickSmoke {
         }
         for trick in HammerTrick.allCases {
             let scene = makeScene()
+            var time = 0.0
+            func advance() { time += 1.0 / 60; scene.update(time) }
             let held = scene.childNode(withName: "//heldHammer") as! SKSpriteNode
             let flying = scene.childNode(withName: "//flyingHammer") as! SKSpriteNode
             let hand = scene.childNode(withName: "//hammerHand")!
             require(scene.playHammerTrick(trick), "Idle scene must accept \(trick)")
             require(!scene.playHammerTrick(trick), "Repeated requests must not duplicate a flying hammer")
             let gif = CGImageDestinationCreateWithURL(output.appendingPathComponent("hammer-\(trick.rawValue).gif") as CFURL,
-                                                      "com.compuserve.gif" as CFString, 60, nil)!
+                                                      "com.compuserve.gif" as CFString, 80, nil)!
             CGImageDestinationSetProperties(gif, [kCGImagePropertyGIFDictionary:
                 [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
             var sawDetached = false
             var sawDistant = false
-            for frame in 1...180 {
-                scene.update(Double(frame) / 60)
+            var flightAngles: [CGFloat] = []
+            // Include pickup from the floor (0.42s) and the longest trick (3.1s).
+            for frame in 1...240 {
+                advance()
                 if !flying.isHidden {
                     sawDetached = true
+                    flightAngles.append(flying.zRotation)
+                    if trick == .toss {
+                        require(flying.texture != nil && flying.alpha == 1,
+                                "The tossed hammer must stay opaque throughout its flight")
+                    }
                     require(held.isHidden && (!hand.isHidden || scene.childNode(withName: "//hammerPoseHand")?.isHidden == false), "Only the tool must leave the visible hand")
                     let grip = held.parent!.convert(held.position, to: flying.parent!)
                     sawDistant = sawDistant || abs(flying.position.x - grip.x) > 100
@@ -70,6 +87,10 @@ struct HammerTrickSmoke {
             }
             require(CGImageDestinationFinalize(gif), "Animation preview must export")
             require(sawDetached && (trick != .recall || sawDistant), "Both flight paths must be visible and distinct")
+            if trick == .toss {
+                require((flightAngles.max()! - flightAngles.min()!) > 5 * .pi,
+                        "The airborne toss must rotate through nearly three full turns")
+            }
             require(!scene.isHammerTrickPlaying && !held.isHidden && flying.isHidden,
                     "The trick must end with exactly one held hammer")
             require(held.alpha == 1, "Recall must restore a fully opaque held tool")
@@ -77,7 +98,8 @@ struct HammerTrickSmoke {
             var externalFrame: HammerFlightFrame?
             scene.onHammerFlight = { externalFrame = $0 }
             require(scene.playHammerTrick(trick), "A finished trick must be replayable")
-            for frame in 181...225 { scene.update(Double(frame) / 60) }
+            let flightFrames = Int(ceil((0.42 + trick.releaseTime + 0.15) * 60))
+            for _ in 0..<flightFrames { advance() }
             require(externalFrame != nil && flying.isHidden && held.isHidden,
                     "External flight must replace both in-window copies")
             scene.render(state: .working, reduceMotion: false)
@@ -86,7 +108,7 @@ struct HammerTrickSmoke {
             scene.render(state: .idle, reduceMotion: false)
             require(!scene.playHammerTrick(trick), "A recovering forge stroke must keep ownership of the hammer")
             // Include the new .55s preparation before the final strike recovers.
-            for frame in 226...360 { scene.update(Double(frame) / 60) }
+            for _ in 0..<135 { advance() }
             require(scene.playHammerTrick(trick), "A recovered idle hammer must allow a new trick")
             scene.beginPress()
             require(!scene.isHammerTrickPlaying && !held.isHidden, "Pressing must safely reclaim the tool")
