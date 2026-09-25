@@ -97,6 +97,40 @@ class BridgeIntegration(unittest.TestCase):
             process.stdout.close()
             process.stderr.close()
 
+    def run_statusline(self, data, path):
+        result = subprocess.run([BRIDGE, "--claude-statusline", "--rate-limits-file", path], input=data,
+                                capture_output=True, timeout=2)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(result.stderr, b"")
+
+    def test_claude_statusline_records_rate_limits_silently(self):
+        with tempfile.TemporaryDirectory(prefix="spirit-", dir="/tmp") as directory:
+            path = directory + "/claude-rate-limits.json"
+            payload = {"session_id": "s", "model": {"id": "SENSITIVE_SENTINEL"}, "cwd": "/SENSITIVE_SENTINEL",
+                       "rate_limits": {"five_hour": {"used_percentage": 23.5, "resets_at": 1738425600},
+                                       "seven_day": {"used_percentage": 41.2, "resets_at": 1738857600}}}
+            start = time.time()
+            self.run_statusline(json.dumps(payload).encode(), path)
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+            with open(path, "rb") as handle:
+                raw = handle.read()
+            self.assertNotIn(b"SENSITIVE_SENTINEL", raw)
+            stored = json.loads(raw)
+            self.assertEqual(stored["fiveHour"], {"usedPercent": 23.5, "windowDurationMins": 300, "resetsAt": 1738425600})
+            self.assertEqual(stored["sevenDay"], {"usedPercent": 41.2, "windowDurationMins": 10080, "resetsAt": 1738857600})
+            self.assertLessEqual(abs(stored["observedAt"] - start), 5)
+            self.assertEqual(os.listdir(directory), ["claude-rate-limits.json"])
+
+    def test_claude_statusline_without_limits_or_directory_is_silent(self):
+        with tempfile.TemporaryDirectory(prefix="spirit-", dir="/tmp") as directory:
+            path = directory + "/claude-rate-limits.json"
+            for data in [b"", b"broken", b'{"model":{"id":"x"}}', b"x" * 300000]:
+                self.run_statusline(data, path)
+            self.assertFalse(os.path.exists(path))
+            self.run_statusline(b'{"rate_limits":{"five_hour":{"used_percentage":5}}}', directory + "/absent/x.json")
+            self.assertEqual(os.listdir(directory), [])
+
 
 if __name__ == "__main__":
     unittest.main()

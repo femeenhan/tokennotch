@@ -165,7 +165,7 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
     }
 
     @objc private func tick() {
-        if !suspended { fullscreenLikely = frontmostWindowCoversScreen(); model.checkDeadlines(); model.pollUsage(); model.refreshQuota() }
+        if !suspended { fullscreenLikely = frontmostWindowCoversScreen(); model.checkDeadlines(); model.pollUsage(); model.refreshQuota(); model.refreshClaudeUsage() }
         let weekly = [model.generalQuotaBucket?.primary, model.generalQuotaBucket?.secondary].compactMap { $0 }.first { $0.windowDurationMins == 10080 }
         let freshQuota = model.quotaIsFresh(at: Date())
         statusItem.button?.title = weekly?.remainingPercent.map { " " + $0.formatted(.number.precision(.fractionLength(0))) + "%" + (freshQuota ? "" : "*") } ?? ""
@@ -192,11 +192,14 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
             } else if stream.greetingPresentationID == nil { greetingDeadlines.removeValue(forKey: provider) }
             guard let panel = companions[provider] else { continue }
             let current = model.stream(for: provider)
-            // Only Codex currently has an observed account quota. Other providers
-            // retain normal vitality until their own quota source is available.
+            // Codex reads its account quota; Claude uses statusLine rate limits. Others keep normal vitality.
             let windows = [model.generalQuotaBucket?.primary, model.generalQuotaBucket?.secondary].compactMap { $0 }
-            panel.spiritScene.remainingQuota = provider == .codex && model.quotaIsFresh(at: now)
+            switch provider {
+            case .codex: panel.spiritScene.remainingQuota = model.quotaIsFresh(at: now)
                 ? windows.compactMap(\.remainingPercent).min().map { $0 / 100 } : nil
+            case .claude: panel.spiritScene.remainingQuota = model.claudeRemainingQuota(at: now)
+            default: panel.spiritScene.remainingQuota = nil
+            }
             panel.updateSpeech(state: current.state)
             panel.spiritScene.isObserved = current.sessions.values.contains { $0.status != .unknown }
             panel.spiritScene.render(state: current.state,
@@ -398,6 +401,7 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
             installUsageBubbleMonitors()
         }
         if provider == .codex { model.refreshQuota(force: true) }
+        if provider == .claude { model.refreshClaudeUsage(force: true) }
         NSApplication.shared.activate(ignoringOtherApps: true)
         quotaPanel?.makeKeyAndOrderFront(nil)
     }

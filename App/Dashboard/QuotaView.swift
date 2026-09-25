@@ -247,9 +247,10 @@ struct QuotaQuickView: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             let weekly = provider == .codex ? [model.generalQuotaBucket?.primary, model.generalQuotaBucket?.secondary]
-                .compactMap { $0 }.first { $0.windowDurationMins == 10080 } : nil
+                .compactMap { $0 }.first { $0.windowDurationMins == 10080 }
+                : provider == .claude ? model.claudeWindow(10080, at: context.date) : nil
             VStack(alignment: .leading, spacing: 6) {
-                if provider == .codex {
+                if provider == .codex || (provider == .claude && weekly != nil) {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text("주간 잔여").font(.system(size: 12, weight: .medium))
                         Spacer(minLength: 0)
@@ -273,7 +274,10 @@ struct QuotaQuickView: View {
                         .help(model.providerStatus(for: provider))
                 }
                 HStack(spacing: 4) {
-                    if provider != .codex {
+                    if provider == .claude, let today = model.claudeTodayTokens {
+                        Text("오늘 " + today.formatted(.number.notation(.compactName).precision(.fractionLength(0...1)).locale(Locale(identifier: "en_US"))) + " 토큰")
+                            .font(.system(size: 10)).lineLimit(1)
+                    } else if provider != .codex {
                         Text("조회 미지원").font(.system(size: 10))
                     } else if weekly != nil && !model.quotaIsFresh(at: context.date) {
                         Text("이전 값").font(.system(size: 10))
