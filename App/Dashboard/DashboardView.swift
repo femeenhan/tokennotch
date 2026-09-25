@@ -35,7 +35,13 @@ struct DashboardView: View {
                     if tab == 0 {
                         if model.selectedProvider == .codex {
                             QuotaView(model: model)
-                            accountActivity.frame(maxWidth: .infinity)
+                            accountActivity(model.accountUsageDaily, total: model.accountUsage?.lifetimeTokens,
+                                            totalLabel: "누적", error: model.accountUsageError).frame(maxWidth: .infinity)
+                        } else if model.selectedProvider == .claude {
+                            claudeLimits
+                            accountActivity(model.claudeTokenUsage?.daily ?? [], total: model.claudeTokenUsage?.totalTokens,
+                                            totalLabel: "로컬 기록 합계", error: nil).frame(maxWidth: .infinity)
+                            providerActivity
                         } else {
                             providerActivity
                         }
@@ -63,10 +69,12 @@ struct DashboardView: View {
                 activityCount("작업 중", count: query.workingCount)
                 activityCount("확인 필요", count: query.attentionCount)
             }
-            Divider()
-            Text("계정 한도·토큰 사용량 조회 미지원").font(.system(size: 14, weight: .medium))
-            Text("수신한 작업 상태와 도구 이벤트를 표시합니다. 계정 잔여량과 비용은 제공하지 않습니다.")
-                .font(.system(size: 12)).foregroundStyle(.secondary)
+            if model.selectedProvider != .claude {
+                Divider()
+                Text("계정 한도·토큰 사용량 조회 미지원").font(.system(size: 14, weight: .medium))
+                Text("수신한 작업 상태와 도구 이벤트를 표시합니다. 계정 잔여량과 비용은 제공하지 않습니다.")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+            }
             if query.events.isEmpty {
                 Text("관측 기록이 없습니다. 설정에서 CLI 연결을 확인하세요.")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
@@ -91,12 +99,39 @@ struct DashboardView: View {
         }.accessibilityLabel("집계 기간")
     }
 
-    private var accountActivity: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private var claudeLimits: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            VStack(alignment: .leading, spacing: 12) {
+                DashboardSectionTitle(title: "Claude 한도", note: "statusLine 관측")
+                HStack(alignment: .top, spacing: 28) {
+                    ForEach([(300, "5시간"), (10080, "주간")], id: \.0) { minutes, title in
+                        let window = model.claudeWindow(minutes, at: context.date)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(title + " 잔여").font(.system(size: 12)).foregroundStyle(.secondary)
+                            PixelText(window?.remainingPercent.map { $0.formatted(.number.precision(.fractionLength(0))) + "%" } ?? "—", size: 32)
+                            if let reset = window?.resetsAt {
+                                Text(reset.formatted(date: .abbreviated, time: .shortened) + " 초기화")
+                                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                Text(model.claudeRateLimits == nil
+                     ? "Claude Code 작업 후 statusLine으로 한도를 받습니다. Pro·Max 구독에서만 제공됩니다."
+                     : "마지막 관측 " + model.claudeRateLimits!.observedAt.formatted(date: .omitted, time: .shortened) + " · 초기화 시각이 지난 창은 표시하지 않습니다.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+        }.dashboardPanel()
+    }
+
+    private func accountActivity(_ buckets: [CodexDailyUsageBucket], total: Int?, totalLabel: String, error: String?) -> some View {
+        let period = accountPeriod(buckets)
+        let average = period.isEmpty ? nil : period.reduce(0.0) { $0 + Double($1.tokens) } / Double(period.count)
+        return VStack(alignment: .leading, spacing: 8) {
         HStack(alignment: .top, spacing: 20) {
             VStack(alignment: .leading, spacing: 12) {
                 DashboardSectionTitle(title: "사용 기록", note: "최근 26주")
-                AccountTokenHeatmap(buckets: model.accountUsageDaily)
+                AccountTokenHeatmap(buckets: buckets)
             }.frame(maxWidth: .infinity)
             Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 138)
             VStack(alignment: .leading, spacing: 8) {
@@ -106,25 +141,25 @@ struct DashboardView: View {
                     periodPicker
                 }
                 HStack(alignment: .center, spacing: 6) {
-                    PixelText(accountAverage.map { compact($0) } ?? "—", size: 32)
+                    PixelText(average.map { compact($0) } ?? "—", size: 32)
                     Text("토큰").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
-                Text(accountAverage == nil ? "기록 대기" : "\(accountPeriod.count)일 기록 기준")
+                Text(average == nil ? "기록 대기" : "\(period.count)일 기록 기준")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                     .help("선택한 \(days)일 중 기록이 제공된 날짜 수를 기준으로 계산합니다.")
-                if let total = model.accountUsage?.lifetimeTokens {
-                    Text("누적 \(compact(Double(total))) 토큰")
+                if let total {
+                    Text("\(totalLabel) \(compact(Double(total))) 토큰")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
-        if let error = model.accountUsageError {
+        if let error {
             Text(error).font(.system(size: 11)).foregroundStyle(.red)
         }
         }.dashboardPanel()
     }
 
-    private var accountPeriod: [CodexDailyUsageBucket] {
+    private func accountPeriod(_ buckets: [CodexDailyUsageBucket]) -> [CodexDailyUsageBucket] {
         let calendar = Calendar(identifier: .gregorian), today = Calendar(identifier: .gregorian).startOfDay(for: Date())
         let cutoff = calendar.date(byAdding: .day, value: -(days - 1), to: today)!
         let formatter: DateFormatter = {
@@ -132,11 +167,7 @@ struct DashboardView: View {
             return value
         }()
         let low = formatter.string(from: cutoff), high = formatter.string(from: today)
-        return model.accountUsageDaily.filter { $0.startDate >= low && $0.startDate <= high }
-    }
-    private var accountAverage: Double? {
-        guard !accountPeriod.isEmpty else { return nil }
-        return accountPeriod.reduce(0.0) { $0 + Double($1.tokens) } / Double(accountPeriod.count)
+        return buckets.filter { $0.startDate >= low && $0.startDate <= high }
     }
 
     private func compact(_ value: Double) -> String { value.formatted(.number.notation(.compactName).precision(.fractionLength(0...1)).locale(Locale(identifier: "en_US"))) }

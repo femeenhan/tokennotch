@@ -110,3 +110,42 @@ extension CompanionModel {
         return weekly?.resetsAt.map { $0 > now } ?? true
     }
 }
+
+extension CompanionModel {
+    /// Claude has no quota API: tokens come from local transcripts, limits from the statusLine bridge file.
+    func refreshClaudeUsage(force: Bool = false, now: Date = Date()) {
+        let modified = (try? claudeRateLimitsURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        if modified != claudeRateLimitsModified {
+            claudeRateLimitsModified = modified
+            claudeRateLimits = ClaudeRateLimits.read(from: claudeRateLimitsURL)
+        }
+        guard !claudeUsageReading, force || now.timeIntervalSince(claudeUsageLastRead) >= 30 else { return }
+        claudeUsageReading = true
+        claudeUsageLastRead = now
+        let reader = claudeUsageReader
+        Task { [weak self] in
+            let usage = await reader.read()
+            self?.claudeTokenUsage = usage
+            self?.claudeUsageReading = false
+        }
+    }
+
+    var claudeTodayTokens: Int? {
+        guard let usage = claudeTokenUsage else { return nil }
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        let today = formatter.string(from: Date())
+        return usage.daily.first { $0.startDate == today }?.tokens ?? 0
+    }
+
+    /// Remaining share of the tightest Claude window that has not reset yet.
+    func claudeRemainingQuota(at now: Date) -> Double? { claudeRateLimits?.remainingFraction(at: now) }
+
+    func claudeWindow(_ minutes: Int, at now: Date) -> QuotaWindow? {
+        let window = minutes == 300 ? claudeRateLimits?.fiveHour : claudeRateLimits?.sevenDay
+        guard let window, window.resetsAt.map({ $0 > now }) ?? true else { return nil }
+        return window
+    }
+}

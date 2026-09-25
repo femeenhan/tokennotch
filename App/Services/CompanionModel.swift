@@ -98,6 +98,15 @@ final class CompanionModel: ObservableObject {
     @Published var accountUsageError: String?
     @Published var accountUsageDaily: [CodexDailyUsageBucket] = []
     @Published var quotaHistoryError: String?
+    @Published var claudeTokenUsage: ClaudeTokenUsage?
+    @Published var claudeRateLimits: ClaudeRateLimits?
+    var claudeUsageReader = ClaudeTranscriptUsageReader(
+        root: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects"),
+        calendar: .current)
+    var claudeUsageReading = false
+    var claudeUsageLastRead = Date.distantPast
+    var claudeRateLimitsURL = ClaudeRateLimits.defaultURL
+    var claudeRateLimitsModified: Date?
     @Published var quotaMonitoringEnabled = UserDefaults.standard.object(forKey: "quotaMonitoringEnabled") as? Bool ?? true {
         didSet { defaults.set(quotaMonitoringEnabled, forKey: "quotaMonitoringEnabled") }
     }
@@ -169,7 +178,19 @@ final class CompanionModel: ObservableObject {
                 }
                 try ProviderHookInstaller.write(to: file, command: command, installing: true, provider: .claude)
             }
+            // Rate limits are only exposed to statusLine commands; never replace a user's own statusLine.
+            let statusCommand = ClaudeStatusLineInstaller.command(bridgeURL: bridgeURL)
+            var statusState = try (try? Data(contentsOf: file)).map {
+                try ClaudeStatusLineInstaller.state(in: $0, command: statusCommand)
+            } ?? .absent
+            if autoConnectClaude && statusState == .absent && FileManager.default.isExecutableFile(atPath: bridgeURL.path) {
+                try ClaudeStatusLineInstaller.write(to: file, command: statusCommand, installing: true)
+                statusState = .installed
+            }
             claudeConnectionStatus = installed || autoConnectClaude ? "Claude Code 연결됨 · 다음 작업부터 반응합니다." : "Claude Code 감지됨 · 연결을 켜 주세요."
+            if autoConnectClaude && statusState == .foreign {
+                claudeConnectionStatus += " 사용 중인 statusLine이 있어 한도는 받지 않습니다."
+            }
         } catch {
             claudeConnectionStatus = "Claude 연결 설정을 확인하거나 저장하지 못했습니다."
         }
@@ -182,6 +203,9 @@ final class CompanionModel: ObservableObject {
         let command = ProviderHookInstaller.command(bridgeURL: bridgeURL, provider: .claude)
         do {
             try ProviderHookInstaller.write(to: file, command: command, installing: enabled, provider: .claude)
+            if !enabled {
+                try ClaudeStatusLineInstaller.write(to: file, command: ClaudeStatusLineInstaller.command(bridgeURL: bridgeURL), installing: false)
+            }
             autoConnectClaude = enabled
             defaults.set(enabled, forKey: "autoConnectClaude")
             claudeRevealPending = enabled && !visibleProviders.contains(.claude)

@@ -4,7 +4,7 @@ import Darwin
 public enum HookInstaller {
     public enum Failure: Error { case damagedJSON, unsafeDirectory, unsafeFile, concurrentChange, replacementFailed }
 
-    private static func object(_ data: Data) throws -> [String: Any] {
+    static func object(_ data: Data) throws -> [String: Any] {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw Failure.damagedJSON }
         if let hooks = root["hooks"] {
             guard let events = hooks as? [String: Any] else { throw Failure.damagedJSON }
@@ -69,6 +69,15 @@ public enum HookInstaller {
 
     /// Call only for an opted-in install/remove action. No default path means previews cannot write accidentally.
     @discardableResult public static func write(to file: URL, command: String, installing: Bool, events: [String] = CodexHookAdapter.supportedEvents, timeout: Int = 1) throws -> URL? {
+        try write(to: file, backupPrefix: "hooks.json", skipWhenMissing: !installing) { original in
+            try installing ? install(in: original, command: command, events: events, timeout: timeout) : remove(from: original, command: command)
+        }
+    }
+
+    /// Safe replacement shared by configuration writers: owned private directory, no symlinks,
+    /// backup of the previous file, and refusal when the file changed while the update was prepared.
+    /// `transform` receives the current contents (or `{}` when absent); returning identical data writes nothing.
+    @discardableResult static func write(to file: URL, backupPrefix: String, skipWhenMissing: Bool, transform: (Data) throws -> Data) throws -> URL? {
         let parent = file.deletingLastPathComponent()
         var directory = open(parent.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         if directory < 0 && errno == ENOENT {
@@ -84,9 +93,10 @@ public enum HookInstaller {
         let name = file.lastPathComponent
         let initial = try readRegularFile(name, in: directory)
         let original = initial?.data ?? Data("{}".utf8)
-        let updated = try installing ? install(in: original, command: command, events: events, timeout: timeout) : remove(from: original, command: command)
-        if updated == original || (initial == nil && !installing) { return nil }
-        let backupName = initial != nil ? "hooks.json.build-spirit-\(UUID().uuidString).bak" : nil
+        if initial == nil && skipWhenMissing { return nil }
+        let updated = try transform(original)
+        if updated == original { return nil }
+        let backupName = initial != nil ? "\(backupPrefix).build-spirit-\(UUID().uuidString).bak" : nil
         if let backupName {
             try createPrivateFile(backupName, in: directory, data: original)
         }
