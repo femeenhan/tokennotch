@@ -43,6 +43,18 @@ struct HookInstallerTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).allSatisfy { !$0.hasPrefix(".spirit-") })
     }
 
+    @Test func acceptsOwnedReadableClaudeDirectoryAndPreservesOtherHooks() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        try original.write(to: file)
+        let claudeCommand = "'/Applications/Build Spirit.app/Contents/MacOS/SpiritBridge' --claude-hook"
+        _ = try ProviderHookInstaller.write(to: file, command: claudeCommand, installing: true, provider: .claude)
+        #expect(try ProviderHookInstaller.isInstalled(in: Data(contentsOf: file), command: claudeCommand, provider: .claude))
+        #expect(String(decoding: try Data(contentsOf: file), as: UTF8.self).contains("keep unknown"))
+    }
+
     @Test func refusesSymlinkParentWithoutChangingTargetOrCreatingBackup() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let target = directory.appendingPathComponent("real")

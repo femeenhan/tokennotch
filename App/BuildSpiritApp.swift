@@ -85,6 +85,9 @@ final class BuildSpiritApp: NSObject, NSApplicationDelegate, NSMenuDelegate, NSW
             model.hookStatus = "이벤트 수신을 시작하지 못했습니다. 다른 빌드정령 실행 여부와 폴더 권한을 확인해 주세요."
         }
         Task { await model.detectCodex() }
+        if !CommandLine.arguments.contains("--diagnostics") {
+            model.refreshClaudeConnection(bridgeURL: Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/SpiritBridge"))
+        }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = NSImage(systemSymbolName: "flame", accessibilityDescription: "빌드정령")
         statusItem.button?.toolTip = "빌드정령"

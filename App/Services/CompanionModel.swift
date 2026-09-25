@@ -19,6 +19,10 @@ final class CompanionModel: ObservableObject {
     var eventStream: SpiritEventStream { stream(for: .codex) }
     @Published var selectedProvider: SpiritProvider = .codex
     @Published private(set) var visibleProviders: [SpiritProvider] = [.codex]
+    @Published private(set) var autoConnectClaude = false
+    @Published private(set) var claudeConnectionStatus = "Claude Code 확인 중"
+    @Published private(set) var claudeExecutableDetected = false
+    private var claudeRevealPending = false
     @Published private var providerSizes: [String: Double] = [:]
 
     func stream(for provider: SpiritProvider) -> SpiritEventStream { providerStreams.stream(for: provider) }
@@ -107,6 +111,13 @@ final class CompanionModel: ObservableObject {
     var spiritState: SpiritState { eventStream.state }
 
     func receiveHook(_ event: SpiritEvent) {
+        if event.provider == SpiritProvider.claude.rawValue && claudeRevealPending &&
+           (visibleProviders.contains(.claude) || visibleProviders.count < 3) {
+            claudeRevealPending = false
+            defaults.set(false, forKey: "claudeRevealPending")
+            _ = setProviderVisible(.claude, visible: true)
+            selectedProvider = .claude
+        }
         providerStreams.receive(event)
         hookStatus = "\(SpiritProvider(rawValue: event.provider)?.displayName ?? event.provider) CLI 이벤트를 수신했습니다."
         onAppearanceChange?()
@@ -132,6 +143,54 @@ final class CompanionModel: ObservableObject {
             quotaError = "Codex CLI를 찾지 못했습니다. 설정에서 연결을 확인하세요."
         }
     }
+
+    func refreshClaudeConnection(bridgeURL: URL) {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let paths = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map {
+            URL(fileURLWithPath: String($0)).appendingPathComponent("claude").path
+        }
+        let candidates = [home.appendingPathComponent(".local/bin/claude").path,
+                          "/opt/homebrew/bin/claude", "/usr/local/bin/claude"] + paths
+        claudeExecutableDetected = candidates.contains { FileManager.default.isExecutableFile(atPath: $0) }
+        guard claudeExecutableDetected else {
+            claudeConnectionStatus = "Claude Code CLI를 찾지 못했습니다."
+            return
+        }
+        let file = ProviderHookInstaller.configurationURL(for: .claude)
+        let command = ProviderHookInstaller.command(bridgeURL: bridgeURL, provider: .claude)
+        do {
+            let installed = try (try? Data(contentsOf: file)).map {
+                try ProviderHookInstaller.isInstalled(in: $0, command: command, provider: .claude)
+            } ?? false
+            if autoConnectClaude && !installed {
+                guard FileManager.default.isExecutableFile(atPath: bridgeURL.path) else {
+                    claudeConnectionStatus = "연결 브리지를 찾지 못했습니다. 앱을 다시 빌드해 주세요."
+                    return
+                }
+                try ProviderHookInstaller.write(to: file, command: command, installing: true, provider: .claude)
+            }
+            claudeConnectionStatus = installed || autoConnectClaude ? "Claude Code 연결됨 · 다음 작업부터 반응합니다." : "Claude Code 감지됨 · 연결을 켜 주세요."
+        } catch {
+            claudeConnectionStatus = "Claude 연결 설정을 확인하거나 저장하지 못했습니다."
+        }
+    }
+
+    func setClaudeAutoConnection(_ enabled: Bool, bridgeURL: URL) {
+        if enabled && !claudeExecutableDetected { refreshClaudeConnection(bridgeURL: bridgeURL) }
+        guard !enabled || claudeExecutableDetected else { return }
+        let file = ProviderHookInstaller.configurationURL(for: .claude)
+        let command = ProviderHookInstaller.command(bridgeURL: bridgeURL, provider: .claude)
+        do {
+            try ProviderHookInstaller.write(to: file, command: command, installing: enabled, provider: .claude)
+            autoConnectClaude = enabled
+            defaults.set(enabled, forKey: "autoConnectClaude")
+            claudeRevealPending = enabled && !visibleProviders.contains(.claude)
+            defaults.set(claudeRevealPending, forKey: "claudeRevealPending")
+            refreshClaudeConnection(bridgeURL: bridgeURL)
+        } catch {
+            claudeConnectionStatus = "연결 설정을 저장하지 못했습니다. 파일과 폴더 권한을 확인해 주세요."
+        }
+    }
     var latestAlert: String? { alerts.pending.first?.message }
     var onAppearanceChange: (() -> Void)?
     var onAlertChange: (() -> Void)?
@@ -143,6 +202,8 @@ final class CompanionModel: ObservableObject {
         isShown = defaults.bool(forKey: "spiritShown")
         hideInFullScreen = defaults.bool(forKey: "hideInFullScreen")
         soundEnabled = defaults.bool(forKey: "soundEnabled")
+        autoConnectClaude = defaults.bool(forKey: "autoConnectClaude")
+        claudeRevealPending = defaults.bool(forKey: "claudeRevealPending")
         if let stored = defaults.stringArray(forKey: "visibleSpiritProviders") {
             visibleProviders = ProviderSelection.normalized(stored.compactMap(SpiritProvider.init(rawValue:)))
         }

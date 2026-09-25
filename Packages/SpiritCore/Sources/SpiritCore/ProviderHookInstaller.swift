@@ -30,7 +30,20 @@ public enum ProviderHookInstaller {
         try HookInstaller.remove(from: data, command: command)
     }
 
-    /// Explicit UI action only; existing safe atomic writer and ownership checks apply.
+    public static func isInstalled(in data: Data, command: String, provider: SpiritProvider) throws -> Bool {
+        let valid = try HookInstaller.canonical(data)
+        guard let root = try JSONSerialization.jsonObject(with: valid) as? [String: Any],
+              let events = root["hooks"] as? [String: [[String: Any]]] else { return false }
+        return supportedEvents(for: provider).allSatisfy { name in
+            (events[name] ?? []).contains { group in
+                (group["hooks"] as? [[String: Any]] ?? []).contains {
+                    $0["type"] as? String == "command" && $0["command"] as? String == command
+                }
+            }
+        }
+    }
+
+    /// Used by an explicit connection action and later to maintain that opted-in connection.
     @discardableResult public static func write(to file: URL, command: String, installing: Bool, provider: SpiritProvider) throws -> URL? {
         try HookInstaller.write(to: file, command: command, installing: installing, events: supportedEvents(for: provider), timeout: provider == .gemini ? 1000 : 1)
     }

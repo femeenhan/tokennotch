@@ -67,7 +67,7 @@ public enum HookInstaller {
         "'" + bridgeURL.path.replacingOccurrences(of: "'", with: "'\\''") + "' --codex-hook"
     }
 
-    /// Call only for an explicit install/remove action. No default path means previews cannot write accidentally.
+    /// Call only for an opted-in install/remove action. No default path means previews cannot write accidentally.
     @discardableResult public static func write(to file: URL, command: String, installing: Bool, events: [String] = CodexHookAdapter.supportedEvents, timeout: Int = 1) throws -> URL? {
         let parent = file.deletingLastPathComponent()
         var directory = open(parent.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
@@ -80,7 +80,7 @@ public enum HookInstaller {
         defer { close(directory) }
         var directoryInfo = stat()
         guard fstat(directory, &directoryInfo) == 0, directoryInfo.st_mode & S_IFMT == S_IFDIR,
-              directoryInfo.st_uid == getuid(), directoryInfo.st_mode & 0o077 == 0 else { throw Failure.unsafeDirectory }
+              directoryInfo.st_uid == getuid(), directoryInfo.st_mode & 0o022 == 0 else { throw Failure.unsafeDirectory }
         let name = file.lastPathComponent
         let initial = try readRegularFile(name, in: directory)
         let original = initial?.data ?? Data("{}".utf8)

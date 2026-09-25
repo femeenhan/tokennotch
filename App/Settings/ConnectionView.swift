@@ -18,6 +18,16 @@ struct ConnectionView: View {
             if provider == .codex {
                 LabeledContent("감지한 버전", value: model.codexCLI?.version ?? "감지되지 않음")
             }
+            if provider == .claude {
+                Toggle("Claude Code 자동 연결", isOn: Binding(
+                    get: { model.autoConnectClaude },
+                    set: { model.setClaudeAutoConnection($0, bridgeURL: bridgeURL) }
+                ))
+                .disabled(!model.claudeExecutableDetected && !model.autoConnectClaude)
+                Text(model.claudeConnectionStatus).font(.caption).foregroundStyle(.secondary)
+                Text("처음 연결한 뒤 앱을 다시 실행해도 훅을 유지합니다. 첫 작업 이벤트가 오면 Claude 정령을 표시합니다.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             let stream = model.stream(for: provider)
             let presentation = SpiritPresentation(state: stream.state)
             LabeledContent("현재 정령 상태", value: stream.sessions.isEmpty ? "관측 대기" : presentation.label)
@@ -57,6 +67,10 @@ struct ConnectionView: View {
                 .font(.caption).foregroundStyle(.secondary)
             if let installationMessage { Text(installationMessage).font(.caption).textSelection(.enabled) }
         }
+        .onAppear { if provider == .claude { model.refreshClaudeConnection(bridgeURL: bridgeURL) } }
+        .onChange(of: provider) { _, selected in
+            if selected == .claude { model.refreshClaudeConnection(bridgeURL: bridgeURL) }
+        }
     }
 
     private var connectionHint: String {
@@ -69,6 +83,11 @@ struct ConnectionView: View {
     }
 
     private func write(installing: Bool) {
+        if provider == .claude {
+            model.setClaudeAutoConnection(installing, bridgeURL: bridgeURL)
+            installationMessage = model.claudeConnectionStatus
+            return
+        }
         do {
             let backup = try ProviderHookInstaller.write(to: hooksURL, command: command, installing: installing, provider: provider)
             installationMessage = installing ? "\(provider.displayName) 연결 설정을 저장했습니다. " + connectionHint : "이 앱 경로의 빌드정령 hook만 제거했습니다."

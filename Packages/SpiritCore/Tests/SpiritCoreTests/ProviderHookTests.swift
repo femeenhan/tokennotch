@@ -90,4 +90,12 @@ struct ProviderHookTests {
             #expect(try JSONSerialization.jsonObject(with: ProviderHookInstaller.remove(from: once, command: command)) as? NSDictionary == JSONSerialization.jsonObject(with: original) as? NSDictionary)
         }
     }
+
+    @Test func partialClaudeHookDoesNotCountAsConnected() throws {
+        let command = "'/Applications/BuildSpirit.app/Contents/MacOS/SpiritBridge' --claude-hook"
+        let partial = Data(#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"'/Applications/BuildSpirit.app/Contents/MacOS/SpiritBridge' --claude-hook"}]}]}}"#.utf8)
+        #expect(try !ProviderHookInstaller.isInstalled(in: partial, command: command, provider: .claude))
+        let complete = try ProviderHookInstaller.install(in: partial, command: command, provider: .claude)
+        #expect(try ProviderHookInstaller.isInstalled(in: complete, command: command, provider: .claude))
+    }
 }
